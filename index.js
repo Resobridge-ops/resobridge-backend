@@ -63,6 +63,7 @@ mongoose
     const adminRoutes = require("./middleware/admin.js");
     const { router: authRoutes, authenticateUser, authorizeRoles, authenticateToken } = require('./middleware/auth');
     const chatbotRoutes = require("./routes/chatbot.js");
+    const intelligenceRoutes = require("./routes/intelligence.js");
     const { generateAIResponse } = require("./utils/chatbotAI.js");
     const Otp = require("./models/Otp"); // Import the OTP model
     const PendingHallPorter = require("./models/PendingHallPorter.js"); // Import the PendingHallPorter model
@@ -76,6 +77,7 @@ mongoose
     app.use("/auth", authRoutes);
     app.use("/admin", adminRoutes);
     app.use("/chatbot", chatbotRoutes);
+    app.use("/intelligence", intelligenceRoutes);
 
     // User registration endpoint
     app.post("/register", async (req, res) => {
