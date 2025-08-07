@@ -34,10 +34,14 @@ router.get(
 
 router.get("/porters", async (req, res) => {
   try {
+    console.log("📊 Fetching porters data...");
+    
     const porters = await User.find({
       role: "hallporter",
       isApproved: true,
     }).select("fullName hallId email staffId");
+
+    console.log("📊 Found porters:", porters.length);
 
     // const pending = porters.filter((p) => !p.isApproved);
 
@@ -45,31 +49,65 @@ router.get("/porters", async (req, res) => {
       "fullName hallId email staffId"
     );
 
-    // const active = porters
-    //   .filter((p) => p.isApproved)
-    //   .map((p) => ({
-    //     _id: p._id,
-    //     fullName: p.fullName,
-    //     hallId: p.hallId,
-    //     email: p.email,
-    //     staffId: p.staffId,
+    console.log("📊 Found pending:", pending.length);
 
-    //     // resolved: p.resolvedCount || 0,
+    // Debug: Show all halls and their IDs
+    const allHalls = await require("../models/Hall").find({});
+    console.log("📊 All halls in database:", allHalls.map(h => ({ name: h.name, id: h._id })));
 
-    //   }));
+    // Get resolved complaints count for each porter
+    const active = await Promise.all(
+      porters.map(async (p) => {
+        try {
+          console.log(`📊 Processing porter: ${p.fullName}, hallId: ${p.hallId}, type: ${typeof p.hallId}`);
+          
+          // Count resolved complaints for this porter's hall
+          const resolvedCount = await Complaint.countDocuments({
+            hallId: p.hallId,
+            status: "Resolved"
+          });
 
-    const active = porters.map((p) => ({
+          // Count total complaints for this porter's hall
+          const totalCount = await Complaint.countDocuments({
+            hallId: p.hallId
+          });
+
+          // Also try to get some sample complaints to debug
+          const sampleComplaints = await Complaint.find({ hallId: p.hallId }).limit(3);
+          console.log(`📊 Sample complaints for ${p.fullName}:`, sampleComplaints.map(c => ({ id: c._id, hallId: c.hallId, status: c.status })));
+
+          console.log(`📊 Porter ${p.fullName} (${p.hallId}): ${resolvedCount}/${totalCount} complaints`);
+
+          return {
+            _id: p._id,
+            fullName: p.fullName,
+            hallId: p.hallId,
+            email: p.email,
+            staffId: p.staffId,
+            resolved: resolvedCount,
+            total: totalCount,
+            performance: totalCount > 0 ? Math.round((resolvedCount / totalCount) * 100) : 0
+          };
+        } catch (error) {
+          console.error(`❌ Error processing porter ${p.fullName}:`, error);
+          return {
       _id: p._id,
       fullName: p.fullName,
       hallId: p.hallId,
       email: p.email,
       staffId: p.staffId,
-    }));
+            resolved: 0,
+            total: 0,
+            performance: 0
+          };
+        }
+      })
+    );
 
+    console.log("📊 Final active porters data:", active);
     res.status(200).json({ pending, active });
-    console.log("Active hall porters:", active); // 🔍 Debugging output
   } catch (err) {
-    console.error("Error fetching porters:", err);
+    console.error("❌ Error fetching porters:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -190,102 +228,6 @@ router.post(
   }
 );
 
-// Get all complaints (admin)
-// router.get("/complaints", async (req, res) => {
-//   try {
-//     const complaints = await Complaint.find()
-//       .populate("hallId", "name") // get hall name only
-//       .sort({ createdAt: -1 }); // latest first
-
-//     res.status(200).json({ success: true, data: complaints });
-//   } catch (error) {
-//     console.error("Error fetching complaints:", error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// });
-
-// router.get("/complaints", async (req, res) => {
-//   try {
-//     const complaints = await Complaint.aggregate([
-//       {
-//         $lookup: {
-//           from: "halls",
-//           localField: "hall",
-//           foreignField: "_id",
-//           as: "hallInfo"
-//         }
-//       },
-//       {
-//         $lookup: {
-//           from: "complainttypes",
-//           localField: "category",
-//           foreignField: "_id",
-//           as: "categoryInfo"
-//         }
-//       },
-//       {
-//         $unwind: { path: "$hallInfo", preserveNullAndEmptyArrays: true }
-//       },
-//       {
-//         $unwind: { path: "$categoryInfo", preserveNullAndEmptyArrays: true }
-//       },
-//       {
-//         $project: {
-//           _id: 1,
-//           status: 1,
-//           complaintId: 1,
-//           hall: "$hallInfo.name",
-//           category: "$categoryInfo.name"
-//         }
-//       }
-//     ]);
-
-//     res.status(200).json(complaints);
-//   } catch (error) {
-//     console.error("Error fetching complaints:", error);
-//     res.status(500).json({ error: "Failed to fetch complaints" });
-//   }
-// });
-
-// router.get("/complaints", async (req, res) => {
-//   try {
-//     const complaints = await Complaint.aggregate([
-//       {
-//         $lookup: {
-//           from: "halls",
-//           localField: "hall",
-//           foreignField: "_id",
-//           as: "hallInfo"
-//         }
-//       },
-//       {
-//         $lookup: {
-//           from: "complainttypes",
-//           localField: "category",
-//           foreignField: "_id",
-//           as: "categoryInfo"
-//         }
-//       },
-//       { $unwind: { path: "$hallInfo", preserveNullAndEmptyArrays: true } },
-//       { $unwind: { path: "$categoryInfo", preserveNullAndEmptyArrays: true } },
-//       {
-//         $project: {
-//           _id: 1,
-//           complaintId: 1,
-//           status: 1,
-//           createdAt: 1,
-//           hall: "$hallInfo.name",
-//           category: "$categoryInfo.name"
-//         }
-//       }
-//     ]);
-
-//     res.status(200).json(complaints);
-//   } catch (error) {
-//     console.error("Error fetching complaints:", error);
-//     res.status(500).json({ error: "Failed to fetch complaints" });
-//   }
-// });
 
 router.get("/complaints", async (req, res) => {
   try {
@@ -319,6 +261,8 @@ router.get("/complaints", async (req, res) => {
           createdAt: 1,
           hall: "$hallInfo.name", // 👈 This will now work
           category: "$categoryInfo.name", // 👈 This too
+          studentName: 1, // Include student name if available
+          student: 1, // Include student object if available
         },
       },
     ]);
@@ -330,231 +274,59 @@ router.get("/complaints", async (req, res) => {
   }
 });
 
-// router.get("/analytics", async (req, res) => {
-//   try {
-//     const now = new Date();
-//     const oneMonthAgo = new Date();
-//     oneMonthAgo.setMonth(now.getMonth() - 1);
+// Add complaints by hall endpoint for chart data
+router.get("/complaints/by-hall", async (req, res) => {
+  try {
+    console.log("📊 /complaints/by-hall endpoint called");
+    
+    const complaintsByHall = await Complaint.aggregate([
+      {
+        $lookup: {
+          from: "halls",
+          localField: "hallId",
+          foreignField: "_id",
+          as: "hallInfo",
+        },
+      },
+      { $unwind: { path: "$hallInfo", preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: "$hallInfo.name",
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $project: {
+          hallName: "$_id",
+          count: 1,
+          _id: 0,
+        },
+      },
+    ]);
 
-//     const complaints = await Complaint.aggregate([
-//       {
-//         $match: {
-//           createdAt: { $gte: oneMonthAgo },
-//         },
-//       },
-//       {
-//         $lookup: {
-//           from: "halls",
-//           localField: "hall",
-//           foreignField: "_id",
-//           as: "hallInfo",
-//         },
-//       },
-//       {
-//         $lookup: {
-//           from: "complainttypes",
-//           localField: "category",
-//           foreignField: "_id",
-//           as: "categoryInfo",
-//         },
-//       },
-//       {
-//         $unwind: { path: "$hallInfo", preserveNullAndEmptyArrays: true },
-//       },
-//       {
-//         $unwind: { path: "$categoryInfo", preserveNullAndEmptyArrays: true },
-//       },
-//       {
-//         $project: {
-//           _id: 1,
-//           createdAt: 1,
-//           status: 1,
-//           hall: "$hallInfo.name",
-//           category: "$categoryInfo.name",
-//         },
-//       },
-//     ]);
+    console.log("📊 Complaints by hall data:", complaintsByHall);
+    console.log("📊 Data length:", complaintsByHall.length);
+    res.status(200).json(complaintsByHall);
+  } catch (error) {
+    console.error("❌ Error fetching complaints by hall:", error);
+    res.status(500).json({ error: "Failed to fetch complaints by hall" });
+  }
+});
 
-//     // 🧮 Complaints Over Time
-//     const trends = {};
-//     complaints.forEach((c) => {
-//       const dateKey = c.createdAt.toISOString().split("T")[0];
-//       trends[dateKey] = (trends[dateKey] || 0) + 1;
-//     });
-
-//     const complaintTrends = Object.entries(trends).map(([date, count]) => ({
-//       date,
-//       count,
-//     }));
-
-//     // 🏠 Complaints by Hall
-//     const hallCounts = {};
-//     complaints.forEach((c) => {
-//       if (c.hall) {
-//         hallCounts[c.hall] = (hallCounts[c.hall] || 0) + 1;
-//       }
-//     });
-
-//     const complaintsByHall = Object.entries(hallCounts).map(
-//       ([hall, count]) => ({
-//         hall,
-//         count,
-//       })
-//     );
-
-//     // 📂 Complaints by Category
-//     const categoryCounts = {};
-//     complaints.forEach((c) => {
-//       if (c.category) {
-//         categoryCounts[c.category] = (categoryCounts[c.category] || 0) + 1;
-//       }
-//     });
-
-//     const complaintsByCategory = Object.entries(categoryCounts).map(
-//       ([category, value]) => ({
-//         category,
-//         value,
-//       })
-//     );
-
-//     // ✅ Resolved vs ❌ Unresolved
-//     let resolved = 0;
-//     let unresolved = 0;
-
-//     complaints.forEach((c) => {
-//       if (c.status === "Resolved") resolved++;
-//       else unresolved++;
-//     });
-
-//     const resolvedVsUnresolved = [
-//       { status: "Resolved", value: resolved },
-//       { status: "Unresolved", value: unresolved },
-//     ];
-
-//     res.json({
-//       complaintTrends,
-//       complaintsByHall,
-//       complaintsByCategory,
-//       resolvedVsUnresolved,
-//     });
-//   } catch (err) {
-//     console.error("Error fetching analytics:", err);
-//     res.status(500).json({ message: "Server error" });
-//   }
-// });
-
-// ✅ Updated /admin/analytics route to match desired UI structure
-
-// router.get("/analytics", async (req, res) => {
-//   try {
-//     const now = new Date();
-//     const oneMonthAgo = new Date();
-//     oneMonthAgo.setMonth(now.getMonth() - 1);
-
-//     const complaints = await Complaint.aggregate([
-//       {
-//         $match: {
-//           createdAt: { $gte: oneMonthAgo },
-//         },
-//       },
-//       {
-//         $lookup: {
-//           from: "halls",
-//           localField: "hall",
-//           foreignField: "_id",
-//           as: "hallInfo",
-//         },
-//       },
-//       {
-//         $lookup: {
-//           from: "complainttypes",
-//           localField: "category",
-//           foreignField: "_id",
-//           as: "categoryInfo",
-//         },
-//       },
-//       { $unwind: { path: "$hallInfo", preserveNullAndEmptyArrays: true } },
-//       { $unwind: { path: "$categoryInfo", preserveNullAndEmptyArrays: true } },
-//       {
-//         $project: {
-//           _id: 1,
-//           createdAt: 1,
-//           updatedAt: 1,
-//           status: 1,
-//           hall: "$hallInfo.name",
-//           category: "$categoryInfo.name",
-//         },
-//       },
-//     ]);
-
-//     const totalComplaints = complaints.length;
-//     const resolvedComplaints = complaints.filter((c) => c.status === "Resolved").length;
-//     const resolutionRate = totalComplaints
-//       ? Math.round((resolvedComplaints / totalComplaints) * 100)
-//       : 0;
-
-//     let totalResolutionTime = 0;
-//     let resolvedCount = 0;
-
-//     complaints.forEach((c) => {
-//       if (c.status === "Resolved" && c.updatedAt && c.createdAt) {
-//         const diff = (new Date(c.updatedAt) - new Date(c.createdAt)) / (1000 * 60 * 60 * 24);
-//         totalResolutionTime += diff;
-//         resolvedCount++;
-//       }
-//     });
-
-//     const avgResolutionTime = resolvedCount
-//       ? (totalResolutionTime / resolvedCount).toFixed(1)
-//       : "—";
-
-//     const categoryMap = {};
-//     complaints.forEach((c) => {
-//       if (c.category) {
-//         categoryMap[c.category] = (categoryMap[c.category] || 0) + 1;
-//       }
-//     });
-
-//     const categoryStats = Object.entries(categoryMap).map(([name, count]) => ({
-//       name,
-//       count,
-//       percentage: ((count / totalComplaints) * 100).toFixed(1),
-//     }));
-
-//     // Dummy Resource Usage (replace with real data if needed)
-//     const resourceUsage = [
-//       { name: "Electricians", usage: 72 },
-//       { name: "Plumbers", usage: 58 },
-//       { name: "Technicians", usage: 64 },
-//     ];
-
-//     res.json({
-//       totalComplaints,
-//       resolvedComplaints,
-//       resolutionRate,
-//       avgResolutionTime,
-//       categoryStats,
-//       resourceUsage,
-//     });
-//   } catch (err) {
-//     console.error("Error fetching analytics:", err);
-//     res.status(500).json({ message: "Server error" });
-//   }
-// });
 
 
 router.get("/analytics", async (req, res) => {
   try {
-    const now = new Date();
-    const oneMonthAgo = new Date();
-    oneMonthAgo.setMonth(now.getMonth() - 1);
+    // const now = new Date();
+    // const oneMonthAgo = new Date();
+    // oneMonthAgo.setMonth(now.getMonth() - 1);
 
     const complaints = await Complaint.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: oneMonthAgo },
-        },
-      },
+      // {
+      //   $match: {
+      //     createdAt: { $gte: oneMonthAgo },
+      //   },
+      // },
       // Convert string ID to ObjectId for category
       {
         $addFields: {
@@ -564,7 +336,7 @@ router.get("/analytics", async (req, res) => {
       {
         $lookup: {
           from: "halls",
-          localField: "hall",
+          localField: "hallId",
           foreignField: "_id",
           as: "hallInfo",
         },
@@ -632,8 +404,8 @@ complaints.forEach((c) => {
   }
 });
 
-const hallStats = Object.entries(hallMap).map(([name, count]) => ({
-  name,
+const hallStats = Object.entries(hallMap).map(([hallName, count]) => ({
+  hallName,
   count,
   percentage: parseFloat(((count / totalComplaints) * 100).toFixed(1)),
 }));
@@ -651,7 +423,7 @@ const hallStats = Object.entries(hallMap).map(([name, count]) => ({
       resolutionRate,
       avgResolutionTime,
       categoryStats,
-      hallStats,
+      complaintsByHall: hallStats,
       resourceUsage,
     });
   } catch (err) {
@@ -659,6 +431,7 @@ const hallStats = Object.entries(hallMap).map(([name, count]) => ({
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 router.post("/reset-password", async (req, res) => {
   const { email, newPassword } = req.body;
