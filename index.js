@@ -7,44 +7,21 @@ const jwt = require("jsonwebtoken");
 const { celebrate, Joi, errors, Segments } = require("celebrate");
 const cors = require("cors");
 const app = express();
-const PORT = process.env.PORT || 4000;
 
 // Middleware to parse incoming JSON requests
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+
 // Enable CORS for all routes
 app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-         const allowedOrigins = [
-       // Local development ports (allow any port 3000-9999)
-       /^http:\/\/localhost:[3-9][0-9]{3}$/,
-       // Production URLs
-       "https://resobridge-dashboard.netlify.app",
-       "https://resobridge-demo.netlify.app",
-       // Render URLs (add your actual Render frontend URL)
-       /^https:\/\/.*\.onrender\.com$/,
-       "https://resobridge-dashboard.onrender.com"
-     ];
-    
-    // Check if origin matches any allowed pattern
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (typeof allowed === 'string') {
-        return origin === allowed;
-      }
-      return allowed.test(origin);
-    });
-    
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true
+  origin: [
+    "http://localhost:5173", // for local development
+    "http://localhost:5174", // for local development
+    "https://resobridge-dashboard.netlify.app", //  live frontend
+    "https://resobridge-demo.netlify.app"
+  ],
+  credentials: true // only if you're using cookies/sessions/auth
 }));
 
 // Connect to MongoDB using environment variables
@@ -62,22 +39,23 @@ mongoose
     const sendOTP = require("./utils/sendOTP");
     const adminRoutes = require("./middleware/admin.js");
     const { router: authRoutes, authenticateUser, authorizeRoles, authenticateToken } = require('./middleware/auth');
-    const chatbotRoutes = require("./routes/chatbot.js");
-    const intelligenceRoutes = require("./routes/intelligence.js");
-    const { generateAIResponse } = require("./utils/chatbotAI.js");
+
     const Otp = require("./models/Otp"); // Import the OTP model
     const PendingHallPorter = require("./models/PendingHallPorter.js"); // Import the PendingHallPorter model
     const PendingStudent = require("./models/PendingStudent.js");
+    const PendingAdmin = require("./models/PendingAdmin.js"); // Import the PendingAdmin model
     const Notification = require("./models/Notification.js"); // Import the Notification model
     const multer = require("multer");
     const upload = multer();
     const axios = require("axios");
     const sendResetEmail = require("./utils/sendNewAdminEmail.js");
+    const sendResetPasswordEmail = require("./utils/sendResetPassword.js");
+    const sendComplaintReceipt = require("./utils/sendComplaintReceipt.js");
+    const sendPorterNotification = require("./utils/sendPorterNotification");
+
 
     app.use("/auth", authRoutes);
     app.use("/admin", adminRoutes);
-    app.use("/chatbot", chatbotRoutes);
-    app.use("/intelligence", intelligenceRoutes);
 
     // User registration endpoint
     app.post("/register", async (req, res) => {
@@ -145,12 +123,16 @@ mongoose
             message: "Your account is pending approval.",
           });
         }
+        
+        console.log("Plaintext password from frontend:", password);
+        console.log("Hashed password in DB:", user.password);
 
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
           return res
             .status(400)
             .json({ success: false, message: "Invalid email or password" });
+          
         }
 
         const token = jwt.sign(
@@ -233,58 +215,138 @@ function verifyToken(req, res, next) {
     });
 
 
-    app.post('/submit-complaint', authenticateToken,  upload.none(),
-    async (req, res) => {
-      try {
-        const {
-          title,
-          description,
-          roomNumber,
-          category, // ID of category (same as complaintTypeId)
-           imageUrl
-           // Pass Firebase file URL here (optional)
-        } = req.body;
+    // app.post('/submit-complaint', authenticateToken,  upload.none(),
+    // async (req, res) => {
+    //   try {
+    //     const {
+    //       title,
+    //       description,
+    //       roomNumber,
+    //       category, // ID of category (same as complaintTypeId)
+    //        imageUrl
+    //        // Pass Firebase file URL here (optional)
+    //     } = req.body;
     
 
-        if (!title || !description || !roomNumber || !category) {
-          return res.status(400).json({ error: 'All required fields must be filled' });
-        }
+    //     if (!title || !description || !roomNumber || !category) {
+    //       return res.status(400).json({ error: 'All required fields must be filled' });
+    //     }
         
-         // If hallId isn't in the JWT, fetch it
-    const user = await User.findById(req.user.userId);
+    //      // If hallId isn't in the JWT, fetch it
+    // const user = await User.findById(req.user.userId);
 
-    const newComplaint = new Complaint({
-      title,
-      description,
-      roomNumber,
-      complaintTypeId: category,
-      category,
-      userId: req.user.userId,
-      hallId: user.hallId, // use user.hallId after querying
-      imageUrl: imageUrl || null,
-      status: 'Pending',
-      votes: 1,
-    });
+    // const newComplaint = new Complaint({
+    //   title,
+    //   description,
+    //   roomNumber,
+    //   complaintTypeId: category,
+    //   category,
+    //   userId: req.user.userId,
+    //   hallId: user.hallId, // use user.hallId after querying
+    //   imageUrl: imageUrl || null,
+    //   status: 'Pending',
+    //   votes: 1,
+    // });
 
-        console.log('req.body:', req.body);
+    //     console.log('req.body:', req.body);
 
     
-        const savedComplaint = await newComplaint.save();
+    //     const savedComplaint = await newComplaint.save();
     
-        console.log('Complaint submission body:', req.body);
+    //     console.log('Complaint submission body:', req.body);
 
-        res.status(201).json({
+    //     res.status(201).json({
           
-          message: 'Complaint submitted successfully',
-          complaint: savedComplaint
+    //       message: 'Complaint submitted successfully',
+    //       complaint: savedComplaint
           
-        });
+    //     });
     
-      } catch (error) {
-        console.error('Submit Complaint Error:', error);
-        res.status(500).json({ error: 'Something went wrong submitting the complaint' });
+    //   } catch (error) {
+    //     console.error('Submit Complaint Error:', error);
+    //     res.status(500).json({ error: 'Something went wrong submitting the complaint' });
+    //   }
+    // });
+
+
+    app.post(
+  "/submit-complaint",
+  authenticateToken,
+  upload.none(),
+  async (req, res) => {
+    try {
+      const {
+        title,
+        description,
+        roomNumber,
+        category,
+        imageUrl,
+      } = req.body;
+
+      if (!title || !description || !roomNumber || !category) {
+        return res
+          .status(400)
+          .json({ error: "All required fields must be filled" });
       }
-    });
+
+      // Get user details (so we know who submitted)
+      const user = await User.findById(req.user.userId);
+
+      const newComplaint = new Complaint({
+        title,
+        description,
+        roomNumber,
+        complaintTypeId: category,
+        category,
+        userId: req.user.userId,
+        hallId: user.hallId,
+        imageUrl: imageUrl || null,
+        status: "Pending",
+        votes: 1,
+      });
+
+      const savedComplaint = await newComplaint.save();
+
+      // 🔑 Send confirmation email to the student
+      sendComplaintReceipt(
+        user.email,              // student’s email
+        savedComplaint.title,    // complaint title
+        savedComplaint._id       // complaint reference ID
+      );
+
+      const hallporter = await User.findOne({ hallId: user.hallId, role: "hallporter" });
+      const hall = await Hall.findById(user.hallId);
+const hallName = hall ? hall.name : "Unknown Hall";
+
+
+if (hallporter) {
+  await sendPorterNotification(
+    hallporter.email,
+    hallName, // make sure you have this from hallId mapping
+    savedComplaint._id,
+    title,
+    description,
+    roomNumber
+  );
+} else {
+  console.log("❌ No hallporter found for hallId:", user.hallId);
+}
+
+      res.status(201).json({
+        message: "Complaint submitted successfully",
+        complaint: savedComplaint,
+      });
+    } catch (error) {
+      console.error("Submit Complaint Error:", error);
+      res
+        .status(500)
+        .json({ error: "Something went wrong submitting the complaint" });
+    }
+  }
+);
+
+
+    
     
 
    
@@ -709,6 +771,12 @@ app.get("/complaints/by-hall", async (req, res) => {
           });
         }
     
+        // ✅ ADMIN FLOW
+        if (role === "admin") {
+          await User.updateOne({ email }, { isApproved: true });
+        }      
+
+
         return res.status(400).json({ success: false, message: "Role not recognized" });
       } catch (error) {
         console.error("OTP Verification Error:", error);
@@ -716,6 +784,10 @@ app.get("/complaints/by-hall", async (req, res) => {
       }
     });
     
+
+ 
+
+
 
     app.post("/resend-otp", async (req, res) => {
       const { email } = req.body;
@@ -917,6 +989,7 @@ app.post("/forgot-password", async (req, res) => {
 
     const token = jwt.sign(
           { userId: user._id, name: user.fullName, role: user.role },
+          // { userId: user._id },
           process.env.JWT_SECRET,
           { expiresIn: "1h" }
         );
@@ -925,7 +998,7 @@ app.post("/forgot-password", async (req, res) => {
     await user.save();
 
     const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${token}&email=${email}`;
-    await sendResetEmail(email, resetLink);
+    await sendResetPasswordEmail(email, resetLink);
 
     res.json({ message: "Reset link sent" });
   } catch (err) {
@@ -933,6 +1006,32 @@ app.post("/forgot-password", async (req, res) => {
     res.status(500).json({ message: "Error sending reset email" });
   }
 });
+
+// app.post("/reset-password", async (req, res) => {
+//   const { email, token, newPassword } = req.body;
+
+//   try {
+//     const user = await User.findOne({ email, resetToken: token });
+
+//     if (!user || user.resetTokenExpiry < Date.now()) {
+//       return res.status(400).json({ message: "Token is invalid or expired" });
+//     }
+
+//     user.password = newPassword;
+//     user.resetToken = undefined;
+//     user.resetTokenExpiry = undefined;
+//     await user.save();
+
+//     const hashedPassword = await bcrypt.hash(newPassword, 10);
+// user.password = hashedPassword;
+
+
+//     res.json({ message: "Password reset successful" });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ message: "Error resetting password" });
+//   }
+// });
 
 app.post("/reset-password", async (req, res) => {
   const { email, token, newPassword } = req.body;
@@ -944,9 +1043,14 @@ app.post("/reset-password", async (req, res) => {
       return res.status(400).json({ message: "Token is invalid or expired" });
     }
 
-    user.password = newPassword;
+    // hash before save (if no pre-save hook in model)
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+
+    // clear reset fields
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
+
     await user.save();
 
     res.json({ message: "Password reset successful" });
@@ -955,6 +1059,7 @@ app.post("/reset-password", async (req, res) => {
     res.status(500).json({ message: "Error resetting password" });
   }
 });
+
 
 app.get('/healthz', (req, res) => {
   res.status(200).send('OK');
@@ -1016,6 +1121,9 @@ app.patch('/complaints/:id/status', async (req, res) => {
 // Use environment variable for JWT_SECRET
 const jwtSecret = process.env.JWT_SECRET;
 
+// Use environment variable for PORT
+const PORT = process.env.PORT;
+
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);  
+  console.log(`Server is running on port ${PORT}`);
 });

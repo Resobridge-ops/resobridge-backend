@@ -7,6 +7,9 @@ const { authorizeRoles } = require("./auth.js");
 const sendHpApproval = require("../utils/sendHpApproval");
 const sendNewAdminEmail = require("../utils/sendNewAdminEmail");
 const Complaint = require("../models/Complaint");
+const Otp = require("../models/Otp");
+const sendOtpEmail = require("../utils/sendOTP");
+
 
 const router = express.Router();
 
@@ -181,52 +184,299 @@ function generateTempPassword(length = 8) {
   return Math.random().toString(36).slice(-length); // alphanumeric password
 }
 
+function generateOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+}
+
+
+// router.post(
+//   "/create-admin",
+//   authenticateUser,
+//   authorizeRoles("superadmin"),
+//   async (req, res) => {
+//     const { email } = req.body;
+
+//     try {
+//       // Validate CU email
+//       // if (!email.endsWith('@covenantuniversity.edu.ng')) {
+//       //   return res.status(400).json({ error: 'Email must be a valid CU email.' });
+//       // }
+
+//       // Check if already exists
+//       const existingUser = await User.findOne({ email });
+//       if (existingUser) {
+//         return res
+//           .status(409)
+//           .json({ error: "User with this email already exists." });
+//       }
+
+//       // Generate and hash password
+//       const tempPassword = generateTempPassword();
+//       const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+//       const newAdmin = new User({
+//         email,
+//         password: hashedPassword,
+//         role: "admin",
+//         isApproved: false,
+//         forcePasswordReset: true, // Force password reset on first login
+//       });
+
+//       await newAdmin.save();
+
+//       // After await newAdmin.save();
+
+// const otp = generateOtp(); // e.g., 6-digit string
+// const hashedOtp = await bcrypt.hash(otp, 10);
+
+// // await Otp.create({
+// //   email,
+// //   otp: hashedOtp,
+// //   otpExpiry: Date.now() + 10 * 60 * 1000
+// // });
+
+// await Otp.updateOne(
+//   { email },
+//   {
+//     otp: hashedOtp,
+//     otpExpiry: Date.now() + 10 * 60 * 1000
+//   },
+//   { upsert: true }
+// );
+
+
+// await sendOtpEmail(email, otp);
+
+// res.status(201).json({
+//   message: "Admin account created successfully. OTP sent.",
+//   email
+// });
+
+
+//       // Send temporary credentials via email
+//       await sendNewAdminEmail(email, fullName, tempPassword);
+
+//       res.status(201).json({ message: "Admin account created successfully." });
+//     } catch (error) {
+// console.error("Error creating admin:", error.message, error.stack);
+//       res.status(500).json({ error: "Server error creating admin." });
+//     }
+//   }
+// );
+
+
+// router.post(
+//   "/create-admin",
+//   authenticateUser,
+//   authorizeRoles("superadmin"),
+//   async (req, res) => {
+//     const { email } = req.body;
+
+//     try {
+//       // Check if email already exists in User collection
+//       const existingUser = await User.findOne({ email });
+//       if (existingUser) {
+//         return res.status(409).json({ error: "User with this email already exists." });
+//       }
+
+//       // Generate OTP
+//       const otp = generateOtp();
+//       const hashedOtp = await bcrypt.hash(otp, 10);
+
+//       // Store OTP in Otp collection (replace if already exists)
+//       await Otp.updateOne(
+//         { email },
+//         {
+//           otp: hashedOtp,
+//           otpExpiry: Date.now() + 10 * 60 * 1000 // 10 mins
+//         },
+//         { upsert: true }
+//       );
+
+//       // Send OTP email
+//       await sendOtpEmail(email, otp);
+
+//       res.status(200).json({
+//         message: "OTP sent. Complete verification to create admin account.",
+//         email
+//       });
+//     } catch (error) {
+//       console.error("Error sending OTP:", error.message);
+//       res.status(500).json({ error: "Server error sending OTP." });
+//     }
+//   }
+// );
+
 router.post(
   "/create-admin",
   authenticateUser,
   authorizeRoles("superadmin"),
   async (req, res) => {
-    const { email, fullName } = req.body;
+    const { email } = req.body;
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: "Invalid email format." });
+    }
 
     try {
-      // Validate CU email
-      // if (!email.endsWith('@covenantuniversity.edu.ng')) {
-      //   return res.status(400).json({ error: 'Email must be a valid CU email.' });
-      // }
-
-      // Check if already exists
+      // Check if email already exists
       const existingUser = await User.findOne({ email });
       if (existingUser) {
-        return res
-          .status(409)
-          .json({ error: "User with this email already exists." });
+        return res.status(409).json({ error: "User with this email already exists." });
       }
 
-      // Generate and hash password
-      const tempPassword = generateTempPassword();
-      const hashedPassword = await bcrypt.hash(tempPassword, 10);
+      // Generate OTP (ensure it's a string)
+      const otp = generateOtp().toString();
+      const hashedOtp = await bcrypt.hash(otp, 10);
 
-      const newAdmin = new User({
+      // Store OTP in Otp collection
+      await Otp.updateOne(
+        { email },
+        {
+          otp: hashedOtp,
+          otpExpiry: Date.now() + 10 * 60 * 1000, // 10 mins
+        },
+        { upsert: true }
+      );
+
+      // Send OTP email
+      await sendOtpEmail(email, otp);
+
+      res.status(200).json({
+        message: "OTP sent. Complete verification to create admin account.",
         email,
-        fullName,
-        password: hashedPassword,
-        role: "admin",
-        isApproved: true,
-        forcePasswordReset: true, // Force password reset on first login
       });
-
-      await newAdmin.save();
-
-      // Send temporary credentials via email
-      await sendNewAdminEmail(email, fullName, tempPassword);
-
-      res.status(201).json({ message: "Admin account created successfully." });
     } catch (error) {
-      console.error("Error creating admin:", error);
-      res.status(500).json({ error: "Server error creating admin." });
+      console.error("Error sending OTP:", error.message);
+      res.status(500).json({ error: "Server error sending OTP." });
     }
   }
 );
+
+
+// router.post("/verify-admin-otp", async (req, res) => {
+//   const { email, otp } = req.body;
+//   console.log("REQ BODY:", req.body);
+//     console.log("Incoming verification request:", email, otp);
+
+
+
+//   try {
+//     const otpRecord = await Otp.findOne({ email });
+//         console.log("DB OTP record:", otpRecord);
+
+//        if (!otpRecord) {
+//       console.log("OTP not found for:", email);
+//       return res.status(400).json({ error: "OTP not found." });
+//     }
+
+//     if (Date.now() > otpRecord.otpExpiry) {
+//       console.log("OTP expired for:", email);
+//       return res.status(400).json({ error: "OTP expired." });
+//     }
+
+//     console.log("Comparing OTP:", otp, "against hash:", otpRecord.otp);
+
+
+//    const isMatch = await bcrypt.compare(String(otp).trim(), otpRecord.otp);
+
+//     if (!isMatch) {
+//       console.log("OTP mismatch for:", email);
+//       console.log("Comparing OTP:", otp, "against hash:", otpRecord.otp);
+
+//       return res.status(400).json({ error: "Invalid OTP." });
+//     }
+
+//     // Generate and hash temporary password
+//     const tempPassword = generateTempPassword();
+//     const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+//     // Create admin now that OTP is verified
+//     const newAdmin = new User({
+//       email,
+//       password: hashedPassword,
+//       role: "admin",
+//       isApproved: true,
+//       forcePasswordReset: true
+//     });
+
+//     await newAdmin.save();
+
+    
+//     res.status(201).json({
+//       message: "Admin created successfully.",
+//       email
+//     });
+//   } catch (error) {
+//     console.error("Error verifying OTP:", error.message);
+//     res.status(500).json({ error: "Server error verifying OTP." });
+//   }
+// });
+
+router.post("/verify-admin-otp", async (req, res) => {
+  const { email, otp, password, position } = req.body;
+  console.log("REQ BODY:", req.body);
+
+  try {
+    const otpRecord = await Otp.findOne({ email });
+    console.log("DB OTP record:", otpRecord);
+
+    if (!otpRecord) {
+      console.log("OTP not found for:", email);
+      return res.status(400).json({ error: "OTP not found." });
+    }
+
+    if (Date.now() > otpRecord.otpExpiry) {
+      console.log("OTP expired for:", email);
+      return res.status(400).json({ error: "OTP expired." });
+    }
+
+    console.log("Comparing OTP:", otp, "against hash:", otpRecord.otp);
+
+    const isMatch = await bcrypt.compare(String(otp).trim(), otpRecord.otp);
+    if (!isMatch) {
+      console.log("OTP mismatch for:", email);
+      return res.status(400).json({ error: "Invalid OTP." });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      console.log("User already exists:", email);
+      return res.status(409).json({ error: "User with this email already exists." });
+    }
+
+    // Hash the provided password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create admin with provided data
+    const newAdmin = new User({
+      email,
+      password: hashedPassword,
+      role: "admin",
+      position, // Store the position
+      isApproved: true,
+      forcePasswordReset: false, // No need for temp password
+    });
+
+    await newAdmin.save();
+
+    // Optionally, delete the OTP record after successful verification
+    await Otp.deleteOne({ email });
+
+    res.status(201).json({
+      success: true,
+      message: "Admin created successfully.",
+      email,
+    });
+  } catch (error) {
+    console.error("Error verifying OTP:", error.message);
+    res.status(500).json({ error: "Server error verifying OTP." });
+  }
+});
+
 
 
 router.get("/complaints", async (req, res) => {
