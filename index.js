@@ -14,15 +14,50 @@ app.use(express.urlencoded({ extended: true }));
 
 
 // Enable CORS for all routes
+// app.use(cors({
+//   origin: [
+//     "http://localhost:5173", // for local development
+//     "http://localhost:5174", // for local development
+//     "https://resobridge-dashboard.netlify.app", //  live frontend
+//     "https://resobridge-demo.netlify.app"
+//   ],
+//   credentials: true // only if you're using cookies/sessions/auth
+// }));
+
 app.use(cors({
-  origin: [
-    "http://localhost:5173", // for local development
-    "http://localhost:5174", // for local development
-    "https://resobridge-dashboard.netlify.app", //  live frontend
-    "https://resobridge-demo.netlify.app"
-  ],
-  credentials: true // only if you're using cookies/sessions/auth
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+         const allowedOrigins = [
+       // Local development ports (allow any port 3000-9999)
+       /^http:\/\/localhost:[3-9][0-9]{3}$/,
+       // Production URLs
+       "https://resobridge-dashboard.netlify.app",
+       "https://resobridge-demo.netlify.app",
+       // Render URLs (add your actual Render frontend URL)
+       /^https:\/\/.*\.onrender\.com$/,
+       "https://resobridge-dashboard.onrender.com"
+     ];
+    
+    // Check if origin matches any allowed pattern
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (typeof allowed === 'string') {
+        return origin === allowed;
+      }
+      return allowed.test(origin);
+    });
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
 }));
+
+
 
 // Connect to MongoDB using environment variables
 mongoose
@@ -39,6 +74,9 @@ mongoose
     const sendOTP = require("./utils/sendOTP");
     const adminRoutes = require("./middleware/admin.js");
     const { router: authRoutes, authenticateUser, authorizeRoles, authenticateToken } = require('./middleware/auth');
+     const chatbotRoutes = require("./routes/chatbot.js");
+    const intelligenceRoutes = require("./routes/intelligence.js");
+    const { generateAIResponse } = require("./utils/chatbotAI.js");
 
     const Otp = require("./models/Otp"); // Import the OTP model
     const PendingHallPorter = require("./models/PendingHallPorter.js"); // Import the PendingHallPorter model
@@ -56,6 +94,8 @@ mongoose
 
     app.use("/auth", authRoutes);
     app.use("/admin", adminRoutes);
+    app.use("/chatbot", chatbotRoutes);
+    app.use("/intelligence", intelligenceRoutes);
 
     // User registration endpoint
     app.post("/register", async (req, res) => {

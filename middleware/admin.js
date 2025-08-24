@@ -674,7 +674,7 @@ const hallStats = Object.entries(hallMap).map(([hallName, count]) => ({
       avgResolutionTime,
       categoryStats,
       complaintsByHall: hallStats,
-      resourceUsage,
+      // resourceUsage,
     });
   } catch (err) {
     console.error("Error fetching analytics:", err);
