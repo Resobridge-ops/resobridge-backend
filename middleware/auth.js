@@ -39,6 +39,85 @@ function authorizeRoles(...roles) {
 
 
 // Staff Registration (Needs Approval)
+// router.post("/register/staff", async (req, res) => {
+//   const { fullName, email, role, staffId, hallId } = req.body;
+
+  
+//   // if (!fullName || !email || !password || !phoneNumber || !staffId || !hallId) {
+//   //   return res.status(400).json({ success: false, message: "All fields are required" });
+//   // }
+
+//   try {
+//     // const hashedPassword = await bcrypt.hash(password, 10);
+
+//     const existingPending = await PendingHallPorter.findOne({ email });
+//     const existingUser = await User.findOne({ email });
+
+//     if (existingPending || existingUser) {
+//       return res.status(400).json({ success: false, message: "Email already exists." });
+//     };
+
+
+//     const pending = new  PendingHallPorter({
+//       fullName,
+//       email,
+//       // password: hashedPassword,
+//       role: "hallporter", // 👈 Default role for staff
+//       staffId,
+//       hallId,
+//       isApproved: false, // 👈 Staff needs approval before login
+//     });
+
+//     await pending.save();
+
+//     res.json({ success: true, message: "Registration submitted! Awaiting admin approval." });
+//   } catch (error) {
+//     console.error("Signup error:", error);
+//     res.status(500).json({ success: false, message: "Failed to register." });
+//   }
+// });
+
+// router.post("/register/staff", async (req, res) => {
+//   const { fullName, email, role, staffId, hallId } = req.body;
+
+//   // Validate required fields
+//   if (!fullName || !email || !staffId || !hallId || !role) {
+//     return res.status(400).json({ success: false, message: "All fields are required" });
+//   }
+
+//   try {
+//     // Check for existing email
+//     const existingPending = await PendingHallPorter.findOne({ email });
+//     const existingUser = await User.findOne({ email });
+//     if (existingPending || existingUser) {
+//       return res.status(400).json({ success: false, message: "Email already exists" });
+//     }
+
+//     // Check for existing staffId
+//     const existingStaff = await PendingHallPorter.findOne({ staffId });
+//     if (existingStaff) {
+//       return res.status(400).json({ success: false, message: "Staff ID already exists" });
+//     }
+
+//     // Create pending staff entry
+//     const pending = new PendingHallPorter({
+//       fullName,
+//       email,
+//       role, // Use role from request, not hardcoded
+//       staffId,
+//       hallId,
+//       isApproved: false,
+//     });
+
+//     await pending.save();
+
+//     res.json({ success: true, message: "Registration submitted! Awaiting admin approval." });
+//   } catch (error) {
+//     console.error("Signup error:", error);
+//     res.status(500).json({ success: false, message: `Failed to register: ${error.message}` });
+//   }
+// });
+
 router.post("/register/staff", async (req, res) => {
   const { fullName, email, role, staffId, hallId } = req.body;
 
@@ -76,6 +155,9 @@ router.post("/register/staff", async (req, res) => {
     res.status(500).json({ success: false, message: "Failed to register." });
   }
 });
+
+
+
 
 router.post("/login/staff", async (req, res) => {
   const { email, password } = req.body;
@@ -157,6 +239,48 @@ router.post("/login/admin", async (req, res) => {
     res.status(500).json({ message: "Server error during login." });
   }
 });
+
+
+router.post("/login/superadmin", async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const user = await User.findOne({ email, role: "superadmin" });
+
+    if (!user) {
+      return res.status(404).json({ message: "Superadmin account not found." });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid email or password." });
+    }
+
+    const token = jwt.sign(
+      { userId: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    console.log("✅ Superadmin logged in:", email);
+
+    return res.status(200).json({
+      success: true,
+      message: "Login successful",
+      token,
+      userId: user._id,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+    });
+  } catch (error) {
+    console.error("Superadmin login error:", error);
+    res.status(500).json({ message: "Server error during login." });
+  }
+});
+
+
 
 
 // router.get('/staff/stats', authenticateToken, async (req, res) => {
