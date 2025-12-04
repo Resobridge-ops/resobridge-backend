@@ -7,6 +7,8 @@ const jwt = require("jsonwebtoken");
 const { celebrate, Joi, errors, Segments } = require("celebrate");
 const cors = require("cors");
 const app = express();
+const N8N_WEBHOOK_URL = "https://resobridgestorm.app.n8n.cloud/webhook-test/f6bb51e9-2ff0-4e1d-b1f3-ec336077de0f";
+
 
 // Middleware to parse incoming JSON requests
 app.use(express.json());
@@ -309,7 +311,87 @@ function verifyToken(req, res, next) {
     // });
 
 
-    app.post(
+//     app.post(
+//   "/submit-complaint",
+//   authenticateToken,
+//   upload.none(),
+//   async (req, res) => {
+//     try {
+//       const {
+//         title,
+//         description,
+//         roomNumber,
+//         category,
+//         imageUrl,
+//       } = req.body;
+
+//       if (!title || !description || !roomNumber || !category) {
+//         return res
+//           .status(400)
+//           .json({ error: "All required fields must be filled" });
+//       }
+
+//       // Get user details (so we know who submitted)
+//       const user = await User.findById(req.user.userId);
+
+//       const newComplaint = new Complaint({
+//         title,
+//         description,
+//         roomNumber,
+//         complaintTypeId: category,
+//         category,
+//         userId: req.user.userId,
+//         hallId: user.hallId,
+//         imageUrl: imageUrl || null,
+//         status: "Pending",
+//         votes: 1,
+//       });
+
+//       const savedComplaint = await newComplaint.save();
+
+//       // 🔑 Send confirmation email to the student
+//       sendComplaintReceipt(
+//         user.email,              // student’s email
+//         savedComplaint.title,    // complaint title
+//         savedComplaint._id       // complaint reference ID
+//       );
+
+//       const hallporter = await User.findOne({ hallId: user.hallId, role: "hallporter" });
+//       const hall = await Hall.findById(user.hallId);
+// const hallName = hall ? hall.name : "Unknown Hall";
+
+
+// if (hallporter) {
+//   await sendPorterNotification(
+//     hallporter.email,
+//     hallName, // make sure you have this from hallId mapping
+//     savedComplaint._id,
+//     title,
+//     description,
+//     roomNumber
+//   );
+// } else {
+//   console.log("❌ No hallporter found for hallId:", user.hallId);
+// }
+
+//       res.status(201).json({
+//         message: "Complaint submitted successfully",
+//         complaint: savedComplaint,
+//       });
+//     } catch (error) {
+//       console.error("Submit Complaint Error:", error);
+//       res
+//         .status(500)
+//         .json({ error: "Something went wrong submitting the complaint" });
+//     }
+//   }
+// );
+
+
+
+
+
+app.post(
   "/submit-complaint",
   authenticateToken,
   upload.none(),
@@ -329,63 +411,70 @@ function verifyToken(req, res, next) {
           .json({ error: "All required fields must be filled" });
       }
 
-      // Get user details (so we know who submitted)
       const user = await User.findById(req.user.userId);
 
-      const newComplaint = new Complaint({
+      // ⭐ Send complaint to n8n instead of saving here
+      const n8nResponse = await axios.post(N8N_WEBHOOK_URL, {
         title,
         description,
         roomNumber,
-        complaintTypeId: category,
         category,
+        imageUrl: imageUrl || null,
         userId: req.user.userId,
         hallId: user.hallId,
-        imageUrl: imageUrl || null,
-        status: "Pending",
-        votes: 1,
       });
 
-      const savedComplaint = await newComplaint.save();
+      const { status, complaint, error } = n8nResponse.data;
 
-      // 🔑 Send confirmation email to the student
+      if (status === "spam") {
+        return res.status(400).json({ error: "Complaint flagged as spam" });
+      }
+
+      const savedComplaint = complaint; // ⭐ Already saved by n8n
+
+      // Email to student
       sendComplaintReceipt(
-        user.email,              // student’s email
-        savedComplaint.title,    // complaint title
-        savedComplaint._id       // complaint reference ID
+        user.email,
+        savedComplaint.title,
+        savedComplaint._id
       );
 
-      const hallporter = await User.findOne({ hallId: user.hallId, role: "hallporter" });
+      const hallporter = await User.findOne({
+        hallId: user.hallId,
+        role: "hallporter"
+      });
+
       const hall = await Hall.findById(user.hallId);
-const hallName = hall ? hall.name : "Unknown Hall";
+      const hallName = hall ? hall.name : "Unknown Hall";
 
-
-if (hallporter) {
-  await sendPorterNotification(
-    hallporter.email,
-    hallName, // make sure you have this from hallId mapping
-    savedComplaint._id,
-    title,
-    description,
-    roomNumber
-  );
-} else {
-  console.log("❌ No hallporter found for hallId:", user.hallId);
-}
+      if (hallporter) {
+        await sendPorterNotification(
+          hallporter.email,
+          hallName,
+          savedComplaint._id,
+          title,
+          description,
+          roomNumber
+        );
+      }
 
       res.status(201).json({
         message: "Complaint submitted successfully",
         complaint: savedComplaint,
       });
+
     } catch (error) {
       console.error("Submit Complaint Error:", error);
-      res
-        .status(500)
-        .json({ error: "Something went wrong submitting the complaint" });
+      res.status(500).json({
+        error: "Something went wrong submitting the complaint"
+      });
     }
   }
 );
 
 
+
+    
     
     
 
@@ -1167,3 +1256,4 @@ const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
