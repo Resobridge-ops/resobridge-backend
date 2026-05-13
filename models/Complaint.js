@@ -15,7 +15,7 @@ const complaintSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "User"
   },
-  imageUrl: { type: String }, // URL of the uploaded image from Firebase
+  imageUrl: { type: String },
   votes: { type: Number, default: 1 },
 
 }, { timestamps: true });
