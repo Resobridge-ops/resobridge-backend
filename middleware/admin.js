@@ -1,6 +1,8 @@
 const express = require("express");
 const PendingHallPorter = require("../models/PendingHallPorter");
+const PendingDepartmentStaff = require("../models/PendingDepartmentStaff");
 const User = require("../models/User");
+const Department = require("../models/Department");
 const bcrypt = require("bcrypt");
 const { authenticateUser } = require("./auth.js");
 const { authorizeRoles } = require("./auth.js");
@@ -481,6 +483,10 @@ router.post("/verify-admin-otp", async (req, res) => {
 
 router.get("/complaints", async (req, res) => {
   try {
+    const page = Number(req.query.page) >= 1 ? Math.floor(Number(req.query.page)) : 1;
+    const limit = Number(req.query.limit) >= 1 ? Math.min(Math.floor(Number(req.query.limit)), 100) : 20;
+    const skip = (page - 1) * limit;
+    
     const complaints = await Complaint.aggregate([
       {
         $lookup: {
@@ -515,9 +521,39 @@ router.get("/complaints", async (req, res) => {
           student: 1, // Include student object if available
         },
       },
+      { $skip: skip },
+      { $limit: limit }
     ]);
 
-    res.status(200).json(complaints);
+    const totalResult = await Complaint.aggregate([
+      {
+        $lookup: {
+          from: "halls",
+          localField: "hallId",
+          foreignField: "_id",
+          as: "hallInfo",
+        },
+      },
+      {
+        $lookup: {
+          from: "complainttypes",
+          localField: "complaintTypeId",
+          foreignField: "_id",
+          as: "categoryInfo",
+        },
+      },
+      { $count: "total" }
+    ]);
+    
+    const total = totalResult.length > 0 ? totalResult[0].total : 0;
+
+    res.status(200).json({
+      data: complaints,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (error) {
     console.error("Error fetching complaints:", error);
     res.status(500).json({ error: "Failed to fetch complaints" });
@@ -556,10 +592,18 @@ router.get("/complaints/by-hall", async (req, res) => {
 
     console.log("📊 Complaints by hall data:", complaintsByHall);
     console.log("📊 Data length:", complaintsByHall.length);
-    res.status(200).json(complaintsByHall);
+    res.status(200).json({
+      success: true,
+      statusCode: 200,
+      data: complaintsByHall
+    });
   } catch (error) {
     console.error("❌ Error fetching complaints by hall:", error);
-    res.status(500).json({ error: "Failed to fetch complaints by hall" });
+    res.status(500).json({ 
+      success: false, 
+      statusCode: 500, 
+      message: "Failed to fetch complaints by hall" 
+    });
   }
 });
 
@@ -708,5 +752,191 @@ router.post("/reset-password", async (req, res) => {
     res.status(500).json({ message: "Failed to reset password." });
   }
 });
+
+// 📌 Fetch admin notifications (pending approvals, new registrations, etc.)
+router.get("/notifications", authenticateUser, authorizeRoles("admin", "superadmin"), async (req, res) => {
+  try {
+    // Get pending hall porters
+    const pendingHallPorters = await PendingHallPorter.find({}).select("fullName email createdAt");
+    
+    // Get pending students (if model exists)
+    let pendingStudents = [];
+    try {
+      const PendingStudent = require("../models/PendingStudent");
+      pendingStudents = await PendingStudent.find({}).select("fullName email createdAt");
+    } catch (err) {
+      // PendingStudent model might not be imported
+      console.log("PendingStudent model not available");
+    }
+
+    // Get pending admins (if model exists)
+    let pendingAdmins = [];
+    try {
+      const PendingAdmin = require("../models/PendingAdmin");
+      pendingAdmins = await PendingAdmin.find({}).select("email fullName createdAt");
+    } catch (err) {
+      // PendingAdmin model might not be imported
+      console.log("PendingAdmin model not available");
+    }
+
+    // Convert to notification format
+    const notifications = [
+      ...pendingHallPorters.map((porter) => ({
+        _id: porter._id,
+        title: "New Hall Porter Pending",
+        message: `${porter.fullName} is awaiting approval`,
+        type: "pending_hallporter",
+        read: false,
+        createdAt: porter.createdAt,
+      })),
+      ...pendingStudents.map((student) => ({
+        _id: student._id,
+        title: "New Student Registration",
+        message: `${student.fullName} needs verification`,
+        type: "pending_student",
+        read: false,
+        createdAt: student.createdAt,
+      })),
+      ...pendingAdmins.map((admin) => ({
+        _id: admin._id,
+        title: "New Admin Pending",
+        message: `${admin.email} is awaiting approval`,
+        type: "pending_admin",
+        read: false,
+        createdAt: admin.createdAt,
+      })),
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.status(200).json({
+      success: true,
+      notifications,
+      count: notifications.length,
+    });
+  } catch (error) {
+    console.error("Error fetching admin notifications:", error);
+    res.status(500).json({ error: "Failed to fetch notifications" });
+  }
+});
+
+// 📌 Fetch pending department staff requests (Admin/Department Admin Only)
+router.get(
+  "/pending-department-staff",
+  authenticateUser,
+  authorizeRoles("admin", "superadmin", "department_admin"),
+  async (req, res) => {
+    try {
+      const { departmentId } = req.query;
+      
+      const query = {};
+      if (departmentId) {
+        query.departmentId = departmentId;
+      } else if (req.user.role === "department_admin") {
+        query.departmentId = req.user.departmentId;
+      }
+
+      const pendingRequests = await PendingDepartmentStaff.find(query)
+        .populate("departmentId", "name code");
+      
+      console.log("Pending department staff:", pendingRequests);
+      res.set("Cache-Control", "no-store");
+      res.json({ success: true, data: pendingRequests });
+    } catch (error) {
+      console.error("Error fetching pending department staff:", error);
+      res.status(500).json({ error: "Failed to fetch pending department staff requests." });
+    }
+  }
+);
+
+// 📌 Approve pending department staff (Admin/Department Admin Only)
+router.post(
+  "/approve-department-staff/:staffId",
+  authenticateUser,
+  authorizeRoles("admin", "superadmin", "department_admin"),
+  async (req, res) => {
+    try {
+      const { staffId } = req.params;
+
+      const pendingStaff = await PendingDepartmentStaff.findById(staffId);
+      if (!pendingStaff) {
+        return res.status(404).json({ success: false, message: "Pending staff request not found" });
+      }
+
+      // Department admin can only approve for their own department
+      if (req.user.role === "department_admin" && req.user.departmentId.toString() !== pendingStaff.departmentId.toString()) {
+        return res.status(403).json({ success: false, message: "Cannot approve staff for other departments" });
+      }
+
+      // Check if email already exists
+      const existingUser = await User.findOne({ email: pendingStaff.email });
+      if (existingUser) {
+        return res.status(409).json({ success: false, message: "Email already registered" });
+      }
+
+      // Hash password if provided
+      let hashedPassword = null;
+      if (pendingStaff.password) {
+        hashedPassword = await bcrypt.hash(pendingStaff.password, 10);
+      }
+
+      // Create approved user
+      const approvedUser = await User.create({
+        fullName: pendingStaff.fullName,
+        email: pendingStaff.email,
+        password: hashedPassword,
+        staffId: pendingStaff.staffId,
+        role: pendingStaff.role,
+        departmentId: pendingStaff.departmentId,
+        position: pendingStaff.position,
+        isApproved: true,
+      });
+
+      // Add to department staff list
+      await Department.findByIdAndUpdate(
+        pendingStaff.departmentId,
+        { $addToSet: { staffIds: approvedUser._id } },
+        { new: true }
+      );
+
+      // Delete pending request
+      await PendingDepartmentStaff.findByIdAndDelete(staffId);
+
+      console.log(`✅ Department staff ${pendingStaff.fullName} approved`);
+      res.json({ success: true, message: "Staff approved successfully", user: approvedUser });
+    } catch (error) {
+      console.error("Error approving department staff:", error);
+      res.status(500).json({ success: false, message: "Failed to approve department staff" });
+    }
+  }
+);
+
+// 📌 Reject pending department staff (Admin/Department Admin Only)
+router.post(
+  "/reject-department-staff/:staffId",
+  authenticateUser,
+  authorizeRoles("admin", "superadmin", "department_admin"),
+  async (req, res) => {
+    try {
+      const { staffId } = req.params;
+
+      const pendingStaff = await PendingDepartmentStaff.findById(staffId);
+      if (!pendingStaff) {
+        return res.status(404).json({ success: false, message: "Pending staff request not found" });
+      }
+
+      // Department admin can only reject for their own department
+      if (req.user.role === "department_admin" && req.user.departmentId.toString() !== pendingStaff.departmentId.toString()) {
+        return res.status(403).json({ success: false, message: "Cannot reject staff for other departments" });
+      }
+
+      await PendingDepartmentStaff.findByIdAndDelete(staffId);
+
+      console.log(`❌ Department staff ${pendingStaff.fullName} rejected`);
+      res.json({ success: true, message: "Staff request rejected successfully" });
+    } catch (error) {
+      console.error("Error rejecting department staff:", error);
+      res.status(500).json({ success: false, message: "Failed to reject department staff" });
+    }
+  }
+);
 
 module.exports = router;

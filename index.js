@@ -11,20 +11,14 @@ const N8N_WEBHOOK_URL = "https://resobridgestorm.app.n8n.cloud/webhook-test/f6bb
 
 
 // Middleware to parse incoming JSON requests
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// app.use(express.json());
+// app.use(express.urlencoded({ extended: true }));
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 
-// Enable CORS for all routes
-// app.use(cors({
-//   origin: [
-//     "http://localhost:5173", // for local development
-//     "http://localhost:5174", // for local development
-//     "https://resobridge-dashboard.netlify.app", //  live frontend
-//     "https://resobridge-demo.netlify.app"
-//   ],
-//   credentials: true // only if you're using cookies/sessions/auth
-// }));
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -73,11 +67,16 @@ mongoose
     const User = require("./models/User");
     const Hall = require("./models/Hall");
     const ComplaintType = require("./models/ComplaintType");
+    const Department = require("./models/Department");
+    const DepartmentCategory = require("./models/DepartmentCategory");
+    const PendingDepartmentStaff = require("./models/PendingDepartmentStaff");
     const sendOTP = require("./utils/sendOTP");
     const adminRoutes = require("./middleware/admin.js");
-    const { router: authRoutes, authenticateUser, authorizeRoles, authenticateToken } = require('./middleware/auth');
+    const { router: authRoutes, authenticateUser, authorizeRoles, authenticateToken, authorizeRolesByDepartment } = require('./middleware/auth');
      const chatbotRoutes = require("./routes/chatbot.js");
     const intelligenceRoutes = require("./routes/intelligence.js");
+    const infrastructureRoutes = require("./routes/Infrastructure.js");
+    const departmentRoutes = require("./routes/department.js");
     const { generateAIResponse } = require("./utils/chatbotAI.js");
 
     const Otp = require("./models/Otp"); // Import the OTP model
@@ -94,15 +93,48 @@ mongoose
     const sendPorterNotification = require("./utils/sendPorterNotification");
 
 
+    // Mount auth routes under both /auth and /api/auth to support frontend expectations
     app.use("/auth", authRoutes);
+    app.use("/api/auth", authRoutes);
     app.use("/admin", adminRoutes);
     app.use("/chatbot", chatbotRoutes);
     app.use("/intelligence", intelligenceRoutes);
+    // Mount infrastructure routes under both /infrastructure and /api/infrastructure
+    app.use("/infrastructure", infrastructureRoutes);
+    app.use("/api/infrastructure", infrastructureRoutes);
+    app.use("/departments", departmentRoutes);
+    app.use("/api/departments", departmentRoutes);
 
     // User registration endpoint
     app.post("/register", async (req, res) => {
       try {
         const { fullName, email, password, role, hallId, studentId } = req.body;
+    
+        // Input validation
+        if (!fullName || !email || !password || !role || !hallId || !studentId) {
+          return res.status(400).json({ message: "All fields are required" });
+        }
+
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+          return res.status(400).json({ message: "Invalid email format" });
+        }
+
+        if (typeof password !== 'string' || password.length < 6) {
+          return res.status(400).json({ message: "Password must be at least 6 characters" });
+        }
+
+        if (typeof fullName !== 'string' || fullName.trim().length < 2) {
+          return res.status(400).json({ message: "Full name must be at least 2 characters" });
+        }
+
+        if (typeof studentId !== 'string' || studentId.trim().length < 2) {
+          return res.status(400).json({ message: "Student ID is invalid" });
+        }
+
+        if (role !== 'student') {
+          return res.status(400).json({ message: "Invalid role" });
+        }
     
         // Check if user already exists
         const existingUser = await User.findOne({ email });
@@ -210,11 +242,41 @@ mongoose
     
 
 // Middleware to verify JWT token
+// function verifyToken(req, res, next) {
+//   const authHeader = req.headers.authorization;
+
+//   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+//     return res.status(401).json({ success: false, message: "No token provided" });
+//   }
+
+//   const token = authHeader.split(" ")[1];
+
+//   try {
+//     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+//     // You can now access `req.user` in the next handler
+//     req.user = decoded;
+
+//     // Optional role check
+//     if (decoded.role !== "student") {
+//       return res.status(403).json({ success: false, message: "Unauthorized access" });
+//     }
+
+//     next(); // All good, move on to the next middleware or route
+//   } catch (err) {
+//     return res.status(401).json({ success: false, message: "Invalid token" });
+//   }
+// }
+
+
 function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ success: false, message: "No token provided" });
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({
+      success: false,
+      message: "No token provided",
+    });
   }
 
   const token = authHeader.split(" ")[1];
@@ -222,18 +284,28 @@ function verifyToken(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // You can now access `req.user` in the next handler
     req.user = decoded;
 
-    // Optional role check
-    if (decoded.role !== "student") {
-      return res.status(403).json({ success: false, message: "Unauthorized access" });
-    }
-
-    next(); // All good, move on to the next middleware or route
+    next();
   } catch (err) {
-    return res.status(401).json({ success: false, message: "Invalid token" });
+    return res.status(401).json({
+      success: false,
+      message: "Invalid token",
+    });
   }
+}
+
+
+
+function requireStudent(req, res, next) {
+  if (req.user.role?.toLowerCase() !== "student") {
+    return res.status(403).json({
+      success: false,
+      message: "Students only",
+    });
+  }
+
+  next();
 }
 
 
@@ -257,143 +329,11 @@ function verifyToken(req, res, next) {
     });
 
 
-    // app.post('/submit-complaint', authenticateToken,  upload.none(),
-    // async (req, res) => {
-    //   try {
-    //     const {
-    //       title,
-    //       description,
-    //       roomNumber,
-    //       category, // ID of category (same as complaintTypeId)
-    //        imageUrl
-    //        // Pass Firebase file URL here (optional)
-    //     } = req.body;
-    
-
-    //     if (!title || !description || !roomNumber || !category) {
-    //       return res.status(400).json({ error: 'All required fields must be filled' });
-    //     }
-        
-    //      // If hallId isn't in the JWT, fetch it
-    // const user = await User.findById(req.user.userId);
-
-    // const newComplaint = new Complaint({
-    //   title,
-    //   description,
-    //   roomNumber,
-    //   complaintTypeId: category,
-    //   category,
-    //   userId: req.user.userId,
-    //   hallId: user.hallId, // use user.hallId after querying
-    //   imageUrl: imageUrl || null,
-    //   status: 'Pending',
-    //   votes: 1,
-    // });
-
-    //     console.log('req.body:', req.body);
-
-    
-    //     const savedComplaint = await newComplaint.save();
-    
-    //     console.log('Complaint submission body:', req.body);
-
-    //     res.status(201).json({
-          
-    //       message: 'Complaint submitted successfully',
-    //       complaint: savedComplaint
-          
-    //     });
-    
-    //   } catch (error) {
-    //     console.error('Submit Complaint Error:', error);
-    //     res.status(500).json({ error: 'Something went wrong submitting the complaint' });
-    //   }
-    // });
-
-
-//     app.post(
-//   "/submit-complaint",
-//   authenticateToken,
-//   upload.none(),
-//   async (req, res) => {
-//     try {
-//       const {
-//         title,
-//         description,
-//         roomNumber,
-//         category,
-//         imageUrl,
-//       } = req.body;
-
-//       if (!title || !description || !roomNumber || !category) {
-//         return res
-//           .status(400)
-//           .json({ error: "All required fields must be filled" });
-//       }
-
-//       // Get user details (so we know who submitted)
-//       const user = await User.findById(req.user.userId);
-
-//       const newComplaint = new Complaint({
-//         title,
-//         description,
-//         roomNumber,
-//         complaintTypeId: category,
-//         category,
-//         userId: req.user.userId,
-//         hallId: user.hallId,
-//         imageUrl: imageUrl || null,
-//         status: "Pending",
-//         votes: 1,
-//       });
-
-//       const savedComplaint = await newComplaint.save();
-
-//       // 🔑 Send confirmation email to the student
-//       sendComplaintReceipt(
-//         user.email,              // student’s email
-//         savedComplaint.title,    // complaint title
-//         savedComplaint._id       // complaint reference ID
-//       );
-
-//       const hallporter = await User.findOne({ hallId: user.hallId, role: "hallporter" });
-//       const hall = await Hall.findById(user.hallId);
-// const hallName = hall ? hall.name : "Unknown Hall";
-
-
-// if (hallporter) {
-//   await sendPorterNotification(
-//     hallporter.email,
-//     hallName, // make sure you have this from hallId mapping
-//     savedComplaint._id,
-//     title,
-//     description,
-//     roomNumber
-//   );
-// } else {
-//   console.log("❌ No hallporter found for hallId:", user.hallId);
-// }
-
-//       res.status(201).json({
-//         message: "Complaint submitted successfully",
-//         complaint: savedComplaint,
-//       });
-//     } catch (error) {
-//       console.error("Submit Complaint Error:", error);
-//       res
-//         .status(500)
-//         .json({ error: "Something went wrong submitting the complaint" });
-//     }
-//   }
-// );
-
-
-
-
+ 
 
 app.post(
   "/submit-complaint",
-  authenticateToken,
+  verifyToken,
   upload.none(),
   async (req, res) => {
     try {
@@ -402,71 +342,96 @@ app.post(
         description,
         roomNumber,
         category,
-        imageUrl,
+        image,
       } = req.body;
 
+      // Validate required fields
       if (!title || !description || !roomNumber || !category) {
-        return res
-          .status(400)
-          .json({ error: "All required fields must be filled" });
+        return res.status(400).json({ error: "All required fields must be filled" });
       }
 
+      // Get user from database
       const user = await User.findById(req.user.userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
 
-      // ⭐ Send complaint to n8n instead of saving here
-      const n8nResponse = await axios.post(N8N_WEBHOOK_URL, {
+      // Get complaint type and validate it exists
+      const complaintType = await ComplaintType.findOne({ name: category });
+      if (!complaintType) {
+        return res.status(400).json({ error: "Invalid complaint category" });
+      }
+
+      // Create and save complaint to database
+      const newComplaint = new Complaint({
         title,
         description,
         roomNumber,
         category,
-        imageUrl: imageUrl || null,
         userId: req.user.userId,
         hallId: user.hallId,
+        complaintTypeId: complaintType._id,
+        imageUrl: image || null,
+        status: "Pending",
+        votes: 1,
       });
 
-      const { status, complaint, error } = n8nResponse.data;
+      const savedComplaint = await newComplaint.save();
+      console.log("Complaint saved:", savedComplaint._id);
 
-      if (status === "spam") {
-        return res.status(400).json({ error: "Complaint flagged as spam" });
+      // Send receipt email (non-blocking)
+      try {
+        sendComplaintReceipt(user.email, savedComplaint.title, savedComplaint._id);
+      } catch (emailError) {
+        console.error("Error sending complaint receipt:", emailError);
       }
 
-      const savedComplaint = complaint; // ⭐ Already saved by n8n
+      // Notify hall porter (non-blocking)
+      try {
+        const hallporter = await User.findOne({
+          hallId: user.hallId,
+          role: "hallporter"
+        });
 
-      // Email to student
-      sendComplaintReceipt(
-        user.email,
-        savedComplaint.title,
-        savedComplaint._id
-      );
+        if (hallporter) {
+          const hall = await Hall.findById(user.hallId);
+          const hallName = hall ? hall.name : "Unknown Hall";
 
-      const hallporter = await User.findOne({
-        hallId: user.hallId,
-        role: "hallporter"
-      });
-
-      const hall = await Hall.findById(user.hallId);
-      const hallName = hall ? hall.name : "Unknown Hall";
-
-      if (hallporter) {
-        await sendPorterNotification(
-          hallporter.email,
-          hallName,
-          savedComplaint._id,
-          title,
-          description,
-          roomNumber
-        );
+          await sendPorterNotification(
+            hallporter.email,
+            hallName,
+            savedComplaint._id,
+            title,
+            description,
+            roomNumber
+          );
+        }
+      } catch (notificationError) {
+        console.error("Error sending porter notification:", notificationError);
       }
 
+      // Return success response
       res.status(201).json({
+        success: true,
         message: "Complaint submitted successfully",
-        complaint: savedComplaint,
+        complaint: {
+          _id: savedComplaint._id,
+          title: savedComplaint.title,
+          description: savedComplaint.description,
+          roomNumber: savedComplaint.roomNumber,
+          category: savedComplaint.category,
+          status: savedComplaint.status,
+          createdAt: savedComplaint.createdAt,
+        },
       });
 
     } catch (error) {
       console.error("Submit Complaint Error:", error);
+      console.error(error.message);
+      console.error(error.stack);
       res.status(500).json({
-        error: "Something went wrong submitting the complaint"
+        success: false,
+        error: "Failed to submit complaint"
       });
     }
   }
@@ -482,22 +447,72 @@ app.post(
     // Route for users to view their notifications
     app.get("/notifications/:userId", async (req, res) => {
   try {
-    const notifications = await Notification.find({ userId: req.params.userId }).sort({ createdAt: -1 });
-    res.status(200).json({ success: true, notifications });
+    const page = Number(req.query.page) >= 1 ? Math.floor(Number(req.query.page)) : 1;
+    const limit = Number(req.query.limit) >= 1 ? Math.min(Math.floor(Number(req.query.limit)), 100) : 20;
+    const skip = (page - 1) * limit;
+    
+    // Verify user exists
+    const user = await User.findById(req.params.userId);
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        statusCode: 404, 
+        message: "User not found" 
+      });
+    }
+    
+    const total = await Notification.countDocuments({ userId: req.params.userId });
+    const notifications = await Notification.find({ userId: req.params.userId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+    
+    res.status(200).json({ 
+      success: true, 
+      statusCode: 200, 
+      data: notifications,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (err) {
     console.error("Error fetching notifications:", err);
-    res.status(500).json({ success: false, message: "Failed to fetch notifications" });
+    res.status(500).json({ 
+      success: false, 
+      statusCode: 500, 
+      message: "Internal server error" 
+    });
   }
 });
 
 app.get("/notifications/unread-count/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
+    
+    // Verify user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        statusCode: 404, 
+        message: "User not found" 
+      });
+    }
+    
     const count = await Notification.countDocuments({ userId, read: false });
-    res.json({ unreadCount: count });
+    res.json({ 
+      success: true, 
+      statusCode: 200, 
+      unreadCount: count 
+    });
   } catch (error) {
     console.error("Error fetching unread count:", error);
-    res.status(500).json({ unreadCount: 0 });
+    res.status(500).json({ 
+      success: false, 
+      statusCode: 500, 
+      unreadCount: 0 
+    });
   }
 });
 

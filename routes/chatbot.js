@@ -11,23 +11,38 @@ router.get('/history', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
     const userRole = req.user.role;
+    const page = Number(req.query.page) >= 1 ? Math.floor(Number(req.query.page)) : 1;
+    const limit = Number(req.query.limit) >= 1 ? Math.min(Math.floor(Number(req.query.limit)), 100) : 20;
+    const skip = (page - 1) * limit;
+    
     const session = await ChatSession.findOne({ userId }).sort({ updatedAt: -1 });
     
     if (!session) {
       const quickReplies = getQuickRepliesForRole(userRole);
       return res.json({ 
-        messages: [],
+        data: [],
+        page,
+        limit,
+        total: 0,
+        totalPages: 0,
         quickReplies 
       });
     }
 
+    const total = await ChatMessage.countDocuments({ sessionId: session._id });
     const messages = await ChatMessage.find({ sessionId: session._id })
-      .sort({ createdAt: 1 });
+      .sort({ createdAt: 1 })
+      .skip(skip)
+      .limit(limit);
 
     const quickReplies = getQuickRepliesForRole(userRole);
 
     res.json({ 
-      messages,
+      data: messages,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
       quickReplies 
     });
   } catch (error) {
@@ -128,7 +143,8 @@ router.get('/analytics', authenticateToken, async (req, res) => {
     const recentSessions = await ChatSession.find()
       .sort({ updatedAt: -1 })
       .limit(10)
-      .populate('userId', 'fullName email');
+      .populate('userId', 'fullName email')
+      .lean();
 
     res.json({
       totalSessions,

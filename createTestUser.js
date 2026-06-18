@@ -28,6 +28,8 @@ async function createTestUser() {
       email: "test@example.com",
       password: hashedPassword,
       role: "student",
+      studentId: "STU001",
+      hallId: new mongoose.Types.ObjectId('679a47e114e2785a92e104b1'), // Paul Hall
       approved: true, // Students don't need approval
     });
 
@@ -58,8 +60,9 @@ async function createTestUser() {
       email: "porter@example.com",
       password: hashedPassword,
       role: "hallporter",
-      approved: true,
-      hallId: "507f1f77bcf86cd799439011", // You'll need to replace this with a real hall ID
+      staffId: "HP001",
+      hallId: new mongoose.Types.ObjectId('679a47e114e2785a92e104b1'), // Paul Hall
+      isApproved: true,
     });
 
     await porterUser.save();
