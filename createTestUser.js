@@ -28,7 +28,7 @@ async function createTestUser() {
       email: "test@example.com",
       password: hashedPassword,
       role: "student",
-      approved: true, // Students don't need approval
+      isApproved: true, // Students don't need approval
     });
 
     await testUser.save();
@@ -43,7 +43,7 @@ async function createTestUser() {
       email: "admin@example.com",
       password: hashedPassword,
       role: "admin",
-      approved: true,
+      isApproved: true,
     });
 
     await adminUser.save();
@@ -58,7 +58,7 @@ async function createTestUser() {
       email: "porter@example.com",
       password: hashedPassword,
       role: "hallporter",
-      approved: true,
+      isApproved: true,
       hallId: "507f1f77bcf86cd799439011", // You'll need to replace this with a real hall ID
     });
 

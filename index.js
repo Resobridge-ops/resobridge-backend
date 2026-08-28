@@ -11,8 +11,9 @@ const N8N_WEBHOOK_URL = "https://resobridgestorm.app.n8n.cloud/webhook-test/f6bb
 
 
 // Middleware to parse incoming JSON requests
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Raised from the default 100kb so base64-encoded dispute evidence photos (up to 5MB on the client) fit
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 
 // Enable CORS for all routes
@@ -191,7 +192,6 @@ mongoose
           role: user.role,
           userId: user._id, // <--- important
           name: user.fullName,
-          role: user.role,
           email: user.email
         });
         
@@ -224,11 +224,6 @@ function verifyToken(req, res, next) {
 
     // You can now access `req.user` in the next handler
     req.user = decoded;
-
-    // Optional role check
-    if (decoded.role !== "student") {
-      return res.status(403).json({ success: false, message: "Unauthorized access" });
-    }
 
     next(); // All good, move on to the next middleware or route
   } catch (err) {
@@ -557,12 +552,12 @@ app.get("/notifications/unread-count/:userId", async (req, res) => {
 
     // Route for hall porters to view all student requests
     app.get("/porter/requests", verifyToken, async (req, res) => {
-      if (req.role !== "staff")
+      if (req.user.role !== "staff")
         return res.status(403).json({ error: "Unauthorised access" });
 
       try {
         // Find the hall porter's assigned hall
-        const staff = await User.findById(req.userId);
+        const staff = await User.findById(req.user.userId);
         if (!staff || !staff.hallId) {
           return res
             .status(400)
@@ -582,7 +577,7 @@ app.get("/notifications/unread-count/:userId", async (req, res) => {
 
     // Route for admin to allocate resources to halls
     app.post("/admin/allocate", verifyToken, async (req, res) => {
-      if (req.role !== "admin")
+      if (req.user.role !== "admin")
         return res.status(403).json({ error: "Unauthorised access" });
       const { resource, quantity, hallId } = req.body;
       try {
@@ -603,7 +598,7 @@ app.get("/notifications/unread-count/:userId", async (req, res) => {
 
     // Route to view all resource allocations
     app.get("/admin/allocations", verifyToken, async (req, res) => {
-      if (req.role !== "admin")
+      if (req.user.role !== "admin")
         return res.status(403).json({ error: "Unauthorised access" });
       try {
         const allocations = await ResourceAllocation.find();
@@ -1051,11 +1046,11 @@ app.get('/stats', async (req, res) => {
 app.patch('/profile', verifyToken, async (req, res) => {
   let allowedFields = [];
 
-  if (req.userRole === 'student') {
+  if (req.user.role === 'student') {
     allowedFields = ['fullName', 'email', 'hall', 'roomNo'];
-  } else if (req.userRole === 'hallporter') {
+  } else if (req.user.role === 'hallporter') {
     allowedFields = ['fullName', 'email']; // no hall or roomNo
-  } else if (req.userRole === 'admin') {
+  } else if (req.user.role === 'admin') {
     allowedFields = ['fullName', 'email']; // no hall or roomNo either
   } else {
     return res.status(403).json({ message: 'Role not authorized to update profile' });
@@ -1066,7 +1061,7 @@ app.patch('/profile', verifyToken, async (req, res) => {
   if (!isValid) return res.status(400).json({ message: 'Invalid fields for your role' });
 
   try {
-    const user = await User.findById(req.userId);
+    const user = await User.findById(req.user.userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     updates.forEach(field => {
@@ -1089,7 +1084,7 @@ app.post('/profile/change-password', verifyToken, async (req, res) => {
     return res.status(400).json({ message: 'Both current and new password required' });
 
   try {
-    const user = await User.findById(req.userId);
+    const user = await User.findById(req.user.userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     const match = await bcrypt.compare(currentPassword, user.password);
@@ -1225,6 +1220,73 @@ app.patch('/complaints/:id/status', async (req, res) => {
   }
 });
 
+// Route for a student to confirm a resolution and close out their own complaint
+app.put('/complaints/:id/confirm', verifyToken, async (req, res) => {
+  if (req.user.role !== 'student') {
+    return res.status(403).json({ error: 'Unauthorised access' });
+  }
+
+  try {
+    const complaint = await Complaint.findById(req.params.id);
+    if (!complaint) {
+      return res.status(404).json({ error: 'Complaint not found' });
+    }
+
+    if (complaint.userId.toString() !== req.user.userId) {
+      return res.status(403).json({ error: 'Unauthorised access' });
+    }
+
+    if (complaint.status !== 'Awaiting Confirmation') {
+      return res.status(400).json({ error: 'Complaint is not awaiting confirmation' });
+    }
+
+    complaint.status = 'Resolved';
+    await complaint.save();
+
+    return res.json({ success: true, message: 'Complaint confirmed as resolved', complaint });
+  } catch (err) {
+    console.error('Confirm complaint failed:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Route for a student to dispute a resolution on their own complaint
+app.put('/complaints/:id/dispute', verifyToken, async (req, res) => {
+  if (req.user.role !== 'student') {
+    return res.status(403).json({ error: 'Unauthorised access' });
+  }
+
+  const { reason, evidence } = req.body;
+  if (!reason || !reason.trim()) {
+    return res.status(400).json({ error: 'A reason is required to dispute a complaint' });
+  }
+
+  try {
+    const complaint = await Complaint.findById(req.params.id);
+    if (!complaint) {
+      return res.status(404).json({ error: 'Complaint not found' });
+    }
+
+    if (complaint.userId.toString() !== req.user.userId) {
+      return res.status(403).json({ error: 'Unauthorised access' });
+    }
+
+    if (complaint.status !== 'Awaiting Confirmation') {
+      return res.status(400).json({ error: 'Complaint is not awaiting confirmation' });
+    }
+
+    complaint.status = 'Disputed';
+    complaint.disputeReason = reason.trim();
+    if (evidence) complaint.disputeEvidence = evidence;
+    complaint.disputedAt = new Date();
+    await complaint.save();
+
+    return res.json({ success: true, message: 'Complaint disputed', complaint });
+  } catch (err) {
+    console.error('Dispute complaint failed:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
 
 
 

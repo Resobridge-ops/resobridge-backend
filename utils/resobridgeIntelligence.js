@@ -1,6 +1,5 @@
 const axios = require('axios');
 const moment = require('moment');
-const _ = require('lodash');
 
 class ResoBridgeIntelligence {
   constructor() {
@@ -246,7 +245,9 @@ class ResoBridgeIntelligence {
       const analyticsData = {
         totalComplaints: complaints.length,
         resolved: complaints.filter(c => c.status === 'Resolved').length,
-        resolutionRate: Math.round((complaints.filter(c => c.status === 'Resolved').length / complaints.length) * 100),
+        resolutionRate: complaints.length > 0
+          ? Math.round((complaints.filter(c => c.status === 'Resolved').length / complaints.length) * 100)
+          : 0,
         topCategories: categoryTrends.trends?.slice(0, 5) || [],
         trends: categoryTrends.trends || []
       };
