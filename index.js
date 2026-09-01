@@ -39,8 +39,10 @@ app.use(cors({
        "https://resobridge-dashboard.netlify.app",
        "https://resobridge-demo.netlify.app",
        // Render URLs (add your actual Render frontend URL)
-       /^https:\/\/.*\.onrender\.com$/,
-       "https://resobridge-dashboard.onrender.com"
+       // /^https:\/\/.*\.onrender\.com$/,
+       // "https://resobridge-dashboard.onrender.com",
+        /^https:\/\/.*\.onrender\.com$/,
+       "https://resobridge-backend-enal.onrender.com"
      ];
     
     // Check if origin matches any allowed pattern
