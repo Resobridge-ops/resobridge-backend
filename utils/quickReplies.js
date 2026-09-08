@@ -1,5 +1,5 @@
 const QUICK_REPLIES = {
-  student: [
+  MEMBER: [
     {
       text: "Submit Complaint",
       action: "complaint_submission",
@@ -21,17 +21,17 @@ const QUICK_REPLIES = {
       description: "Help with login, password, etc."
     },
     {
-      text: "University Info",
-      action: "university_info",
-      description: "Learn about Covenant University"
+      text: "Organization Info",
+      action: "organization_info",
+      description: "Learn about your organization"
     }
   ],
-  
-  hallporter: [
+
+  STAFF: [
     {
       text: "View Requests",
       action: "view_requests",
-      description: "Check student requests in your hall"
+      description: "Check requests in your department"
     },
     {
       text: "Update Status",
@@ -39,13 +39,13 @@ const QUICK_REPLIES = {
       description: "Update complaint status"
     },
     {
-      text: "Hall Information",
-      action: "hall_info",
-      description: "Get information about your hall"
+      text: "Department Information",
+      action: "department_info",
+      description: "Get information about your department"
     }
   ],
-  
-  admin: [
+
+  ADMIN: [
     {
       text: "System Analytics",
       action: "analytics",
@@ -62,7 +62,7 @@ const QUICK_REPLIES = {
       description: "Manage resource distribution"
     }
   ],
-  
+
   general: [
     {
       text: "Hello",
@@ -82,10 +82,13 @@ const QUICK_REPLIES = {
   ]
 };
 
+QUICK_REPLIES.ORG_ADMIN = QUICK_REPLIES.ADMIN;
+QUICK_REPLIES.SUPERADMIN = QUICK_REPLIES.ADMIN;
+
 function getQuickRepliesForRole(role) {
   const roleReplies = QUICK_REPLIES[role] || [];
   const generalReplies = QUICK_REPLIES.general;
-  
+
   return [...roleReplies, ...generalReplies];
 }
 

@@ -1,35 +1,34 @@
 const express = require('express');
 const router = express.Router();
-const { authenticateToken } = require('../middleware/auth');
-const ChatMessage = require('../models/ChatMessage');
-const ChatSession = require('../models/ChatSession');
+const prisma = require('../prisma/client');
+const { authenticate, authorizeRoles } = require('../middleware/authenticate');
 const { getQuickRepliesForRole } = require('../utils/quickReplies');
 const { generateAIResponse } = require('../utils/chatbotAI');
 
+router.use(authenticate);
+
 // Get chat history for a user
-router.get('/history', authenticateToken, async (req, res) => {
+router.get('/history', async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const userRole = req.user.role;
-    const session = await ChatSession.findOne({ userId }).sort({ updatedAt: -1 });
-    
+    const { id: userId, organizationId, role } = req.user;
+    const session = await prisma.chatSession.findFirst({
+      where: { userId, organizationId },
+      orderBy: { updatedAt: 'desc' },
+    });
+
     if (!session) {
-      const quickReplies = getQuickRepliesForRole(userRole);
-      return res.json({ 
-        messages: [],
-        quickReplies 
-      });
+      const quickReplies = getQuickRepliesForRole(role);
+      return res.json({ messages: [], quickReplies });
     }
 
-    const messages = await ChatMessage.find({ sessionId: session._id })
-      .sort({ createdAt: 1 });
-
-    const quickReplies = getQuickRepliesForRole(userRole);
-
-    res.json({ 
-      messages,
-      quickReplies 
+    const messages = await prisma.chatMessage.findMany({
+      where: { sessionId: session.id },
+      orderBy: { createdAt: 'asc' },
     });
+
+    const quickReplies = getQuickRepliesForRole(role);
+
+    res.json({ messages, quickReplies });
   } catch (error) {
     console.error('Error fetching chat history:', error);
     res.status(500).json({ error: 'Failed to fetch chat history' });
@@ -37,54 +36,36 @@ router.get('/history', authenticateToken, async (req, res) => {
 });
 
 // Send a message to the chatbot
-router.post('/send', authenticateToken, async (req, res) => {
+router.post('/send', async (req, res) => {
   try {
     const { message } = req.body;
-    const userId = req.user.userId;
-    const userRole = req.user.role;
+    const { id: userId, organizationId, role } = req.user;
 
     if (!message || message.trim() === '') {
       return res.status(400).json({ error: 'Message cannot be empty' });
     }
 
-    // Get or create chat session
-    let session = await ChatSession.findOne({ userId });
+    let session = await prisma.chatSession.findFirst({ where: { userId, organizationId } });
     if (!session) {
-      session = new ChatSession({ userId, userRole });
-      await session.save();
+      session = await prisma.chatSession.create({ data: { userId, organizationId, userRole: role } });
     }
 
-    // Save user message
-    const userMessage = new ChatMessage({
-      sessionId: session._id,
-      sender: 'user',
-      content: message.trim(),
-      timestamp: new Date()
-    });
-    await userMessage.save();
-
-    // Generate AI response
-    const aiResponse = await generateAIResponse(message, userRole, userId);
-    
-    // Save AI response
-    const aiMessage = new ChatMessage({
-      sessionId: session._id,
-      sender: 'ai',
-      content: aiResponse,
-      timestamp: new Date()
-    });
-    await aiMessage.save();
-
-    // Update session
-    session.lastMessage = message;
-    session.updatedAt = new Date();
-    await session.save();
-
-    res.json({
-      userMessage: userMessage,
-      aiResponse: aiMessage
+    const userMessage = await prisma.chatMessage.create({
+      data: { sessionId: session.id, sender: 'user', content: message.trim() },
     });
 
+    const aiResponse = await generateAIResponse(message, role, userId, organizationId);
+
+    const aiMessage = await prisma.chatMessage.create({
+      data: { sessionId: session.id, sender: 'ai', content: aiResponse },
+    });
+
+    await prisma.chatSession.update({
+      where: { id: session.id },
+      data: { lastMessage: message, messageCount: { increment: 1 } },
+    });
+
+    res.json({ userMessage, aiResponse: aiMessage });
   } catch (error) {
     console.error('Error processing chat message:', error);
     res.status(500).json({ error: 'Failed to process message' });
@@ -92,14 +73,14 @@ router.post('/send', authenticateToken, async (req, res) => {
 });
 
 // Clear chat history
-router.delete('/clear', authenticateToken, async (req, res) => {
+router.delete('/clear', async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const session = await ChatSession.findOne({ userId });
-    
+    const { id: userId, organizationId } = req.user;
+    const session = await prisma.chatSession.findFirst({ where: { userId, organizationId } });
+
     if (session) {
-      await ChatMessage.deleteMany({ sessionId: session._id });
-      await ChatSession.findByIdAndDelete(session._id);
+      await prisma.chatMessage.deleteMany({ where: { sessionId: session.id } });
+      await prisma.chatSession.delete({ where: { id: session.id } });
     }
 
     res.json({ message: 'Chat history cleared successfully' });
@@ -109,26 +90,25 @@ router.delete('/clear', authenticateToken, async (req, res) => {
   }
 });
 
-// Get chatbot analytics (admin only)
-router.get('/analytics', authenticateToken, async (req, res) => {
+// Get chatbot analytics (ORG_ADMIN / SUPERADMIN only)
+router.get('/analytics', authorizeRoles('ORG_ADMIN', 'SUPERADMIN'), async (req, res) => {
   try {
-    if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
-      return res.status(403).json({ error: 'Unauthorized access' });
-    }
+    const { organizationId } = req.user;
+    const where = { organizationId };
 
-    const totalSessions = await ChatSession.countDocuments();
-    const totalMessages = await ChatMessage.countDocuments();
-    const activeSessions = await ChatSession.countDocuments({ isActive: true });
-    
-    // Get messages by sender type
-    const userMessages = await ChatMessage.countDocuments({ sender: 'user' });
-    const aiMessages = await ChatMessage.countDocuments({ sender: 'ai' });
-
-    // Get recent activity
-    const recentSessions = await ChatSession.find()
-      .sort({ updatedAt: -1 })
-      .limit(10)
-      .populate('userId', 'fullName email');
+    const [totalSessions, totalMessages, activeSessions, userMessages, aiMessages, recentSessions] = await Promise.all([
+      prisma.chatSession.count({ where }),
+      prisma.chatMessage.count({ where: { session: { organizationId } } }),
+      prisma.chatSession.count({ where: { ...where, isActive: true } }),
+      prisma.chatMessage.count({ where: { sender: 'user', session: { organizationId } } }),
+      prisma.chatMessage.count({ where: { sender: 'ai', session: { organizationId } } }),
+      prisma.chatSession.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        take: 10,
+        include: { user: { select: { fullName: true, email: true } } },
+      }),
+    ]);
 
     res.json({
       totalSessions,
@@ -136,7 +116,7 @@ router.get('/analytics', authenticateToken, async (req, res) => {
       activeSessions,
       userMessages,
       aiMessages,
-      recentSessions
+      recentSessions,
     });
   } catch (error) {
     console.error('Error fetching chatbot analytics:', error);

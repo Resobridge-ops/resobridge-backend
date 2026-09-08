@@ -1,0 +1,702 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────
+
+enum OrgStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CANCELED
+}
+
+enum RegistrationMode {
+  OPEN
+  INVITE_ONLY
+  DOMAIN_RESTRICTED
+}
+
+enum Role {
+  SUPERADMIN
+  ORG_ADMIN
+  ADMIN
+  STAFF
+  MEMBER
+}
+
+// Account-level (User) and membership-level (OrganizationMembership) status
+// share this enum intentionally — same meaning, two independent scopes.
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+}
+
+enum BuildingStatus {
+  OPERATIONAL
+  UNDER_MAINTENANCE
+  CLOSED
+}
+
+enum LocationType {
+  INTERIOR
+  EXTERIOR
+}
+
+enum Condition {
+  GOOD
+  MEDIUM
+  BAD
+}
+
+// Deliberately only 4 values for the MVP. Dispute is modeled as an event
+// (ComplaintEvent.type = DISPUTED) plus the dispute* fields below, not as
+// a status — see disputeReason/disputeEvidence/disputedAt on Complaint.
+enum ComplaintStatus {
+  PENDING
+  IN_PROGRESS
+  AWAITING_CONFIRMATION
+  RESOLVED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ComplaintEventType {
+  CREATED
+  STATUS_CHANGED
+  ASSIGNED
+  REASSIGNED
+  ESCALATED
+  COMMENT_ADDED
+  ATTACHMENT_ADDED
+  DISPUTED
+  CONFIRMED
+}
+
+enum NotificationType {
+  COMPLAINT_SUBMITTED
+  COMPLAINT_ASSIGNED
+  COMPLAINT_STATUS_CHANGED
+  COMPLAINT_RESOLVED
+  COMPLAINT_DISPUTED
+  COMPLAINT_ESCALATED
+  STAFF_INVITED
+  STAFF_APPROVED
+  ADMIN_APPROVED
+  INSIGHT_READY
+  PASSWORD_RESET
+  GENERAL // catch-all used to backfill pre-migration notifications that predate the type/title fields
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum PendingUserStatus {
+  PENDING
+  VERIFIED
+  EXPIRED
+}
+
+enum OtpPurpose {
+  REGISTRATION
+  PASSWORD_RESET
+  ADMIN_CREATION
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  APPROVE
+  REJECT
+  INVITE
+  ESCALATE
+  EXPORT
+}
+
+// ─────────────────────────────────────────────────────────
+// Platform / Billing
+// ─────────────────────────────────────────────────────────
+
+model Plan {
+  id              String          @id @default(cuid())
+  name            String          @unique
+  billingInterval BillingInterval
+  priceCents      Int
+  maxUsers        Int?
+  maxDepartments  Int?
+  features        Json            @default("{}")
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  organizationId     String             @unique
+  organization       Organization       @relation(fields: [organizationId], references: [id])
+  planId             String
+  plan               Plan               @relation(fields: [planId], references: [id])
+  status             SubscriptionStatus @default(TRIALING)
+  seats              Int                @default(5)
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  canceledAt         DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────────────────
+// Tenant root
+// ─────────────────────────────────────────────────────────
+
+model Organization {
+  id                  String           @id @default(cuid())
+  name                String
+  slug                String           @unique
+  logoUrl             String?
+  status              OrgStatus        @default(TRIAL)
+  registrationMode    RegistrationMode @default(INVITE_ONLY)
+  allowedEmailDomain  String?
+  primaryContactEmail String?
+  timezone            String           @default("UTC")
+  lastInsightRun      DateTime?
+  complaintsSinceRun  Int              @default(0)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  subscription        Subscription?
+  departments         Department[]
+  memberships         OrganizationMembership[]
+  invitations         Invitation[]
+  pendingUsers        PendingUser[]
+  complaints          Complaint[]
+  notifications       Notification[]
+  auditLogs           AuditLog[]
+  insights            ComplaintInsight[]
+  buildings           Building[]
+  areas               Area[]
+  assets              Asset[]
+  categories          DepartmentCategory[]
+  resourceAllocations ResourceAllocation[]
+  chatSessions        ChatSession[]
+
+  @@index([slug])
+}
+
+// ─────────────────────────────────────────────────────────
+// Org structure
+// ─────────────────────────────────────────────────────────
+
+model Department {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  name               String
+  code               String
+  type               String
+  description        String?
+  email              String?
+  status             Status       @default(ACTIVE)
+  lastInsightRun     DateTime?
+  complaintsSinceRun Int          @default(0)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  categories          DepartmentCategory[]
+  buildings           Building[]
+  complaints          Complaint[]
+  memberships         OrganizationMembership[]
+  insights            ComplaintInsight[]
+  resourceAllocations ResourceAllocation[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model DepartmentCategory {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  departmentId   String
+  department     Department   @relation(fields: [departmentId], references: [id])
+  name           String
+  description    String?
+  subcategories  String[]     @default([])
+  slaHours       Int? // optional default resolution SLA for complaints in this category
+  status         Status       @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  complaints Complaint[]
+
+  @@unique([departmentId, name])
+  @@index([organizationId])
+}
+
+model Building {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  departmentId   String
+  department     Department     @relation(fields: [departmentId], references: [id])
+  name           String
+  description    String?
+  type           String
+  location       String?
+  status         BuildingStatus @default(OPERATIONAL)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  areas Area[]
+
+  @@index([departmentId])
+  @@index([organizationId])
+}
+
+model Area {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  buildingId     String
+  building       Building     @relation(fields: [buildingId], references: [id])
+  parentId       String?
+  parent         Area?        @relation("AreaHierarchy", fields: [parentId], references: [id])
+  children       Area[]       @relation("AreaHierarchy")
+  name           String
+  type           String
+  locationType   LocationType
+  description    String?
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  assets     Asset[]
+  complaints Complaint[]
+
+  @@index([buildingId])
+  @@index([parentId])
+  @@index([organizationId])
+}
+
+model Asset {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  areaId            String
+  area              Area         @relation(fields: [areaId], references: [id])
+  name              String
+  description       String?
+  condition         Condition    @default(GOOD)
+  quantity          Int          @default(1)
+  totalCost         Decimal?     @db.Decimal(12, 2)
+  costOfMaintenance Decimal?     @db.Decimal(12, 2)
+  lastInspected     DateTime?
+  nextInspectionDue DateTime?
+  notes             String?
+  isActive          Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  complaints Complaint[]
+
+  @@index([areaId])
+  @@index([organizationId])
+}
+
+// Transactional consumables ledger — distinct from Asset (static durable-item
+// inventory tied to an Area). This logs repeated, timestamped issuances of a
+// resource to a department (e.g. cleaning supplies, light bulbs) that aren't
+// individually trackable the way a chair or AC unit is. Carried forward from
+// the legacy ResourceAllocation model, re-scoped from hallId to departmentId.
+model ResourceAllocation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  departmentId   String
+  department     Department   @relation(fields: [departmentId], references: [id])
+  resource       String
+  quantity       Int
+  allocatedById  String?
+  allocatedBy    User?        @relation(fields: [allocatedById], references: [id])
+  notes          String?
+  allocatedAt    DateTime     @default(now())
+
+  @@index([departmentId])
+  @@index([organizationId])
+}
+
+// ─────────────────────────────────────────────────────────
+// Identity — User is a global account, independent of any organization.
+// OrganizationMembership is where role/department/approval/scope live.
+// ─────────────────────────────────────────────────────────
+
+model User {
+  id                   String     @id @default(cuid())
+  email                String     @unique
+  password             String?
+  fullName             String?
+  isPlatformSuperadmin Boolean    @default(false) // SUPERADMIN: platform staff, no org membership
+  status               UserStatus @default(ACTIVE) // account-level: can this person log in at all
+  forcePasswordReset   Boolean    @default(false)
+  resetToken           String?
+  resetTokenExpiry     DateTime?
+  lastLoginAt          DateTime?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  memberships         OrganizationMembership[]
+  submittedComplaints Complaint[]              @relation("SubmittedComplaints")
+  assignedComplaints  Complaint[]              @relation("AssignedComplaints")
+  notifications       Notification[]
+  comments            ComplaintComment[]
+  complaintEvents     ComplaintEvent[]         @relation("EventActor")
+  attachmentsUploaded ComplaintAttachment[]
+  auditLogs           AuditLog[]
+  invitationsSent     Invitation[]             @relation("InvitedBy")
+  resourceAllocations ResourceAllocation[]
+  chatSessions        ChatSession[]
+}
+
+// The per-organization relationship: role, department, approval, and scope
+// all live here, not on User, so one person can belong to multiple orgs
+// (or none, if they're a platform SUPERADMIN) without duplicating accounts.
+model OrganizationMembership {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  role           Role
+  departmentId   String? // home department; meaningful for STAFF/MEMBER
+  department     Department?  @relation(fields: [departmentId], references: [id])
+  memberId       String? // org-internal reference id (was studentId/staffId)
+  position       String?
+  status         UserStatus   @default(ACTIVE) // membership-level: active within this org
+  isApproved     Boolean      @default(false)
+  joinedAt       DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  adminScope AdminScope?
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([departmentId])
+}
+
+model AdminScope {
+  id                  String                 @id @default(cuid())
+  membershipId        String                 @unique
+  membership          OrganizationMembership @relation(fields: [membershipId], references: [id])
+  departmentIds       String[]               @default([]) // empty = all departments in the org
+  canManageStaff      Boolean                @default(false)
+  canViewAnalytics    Boolean                @default(false)
+  canEscalate         Boolean                @default(false)
+  canExportReports    Boolean                @default(false)
+  canManageCategories Boolean                @default(false)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+}
+
+// Pre-membership: someone attempting to register into a specific org.
+// If a User with this email already exists globally, acceptance should
+// create an OrganizationMembership directly and skip password/OTP —
+// enforced in the auth route logic, not the schema.
+model PendingUser {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id])
+  departmentId   String?
+  fullName       String
+  email          String
+  // Nullable: MEMBER self-registration collects a password upfront (set here,
+  // moved to User.password on OTP verification). STAFF/ADMIN requests via
+  // /register/staff don't — they get a system-generated temp password only
+  // on admin approval, so this stays null until then.
+  password       String?
+  role           Role
+  position       String?
+  memberId       String?
+  status         PendingUserStatus @default(PENDING)
+  expiresAt      DateTime
+  createdAt      DateTime          @default(now())
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@index([expiresAt])
+}
+
+// An ORG_ADMIN/ADMIN-initiated invite to a specific org. Distinct from
+// PendingUser: an invitation is pre-vetted by the inviter, so acceptance
+// never requires a separate approval step.
+model Invitation {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  departmentId   String?
+  email          String
+  role           Role
+  token          String           @unique
+  invitedById    String
+  invitedBy      User             @relation("InvitedBy", fields: [invitedById], references: [id])
+  status         InvitationStatus @default(PENDING)
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+model Otp {
+  id             String     @id @default(cuid())
+  email          String
+  organizationId String? // null for account-level purposes (e.g. password reset)
+  otp            String
+  purpose        OtpPurpose
+  otpExpiry      DateTime
+  createdAt      DateTime   @default(now())
+
+  @@index([email, purpose])
+}
+
+// ─────────────────────────────────────────────────────────
+// Complaints
+// ─────────────────────────────────────────────────────────
+
+model Complaint {
+  id              String             @id @default(cuid())
+  organizationId  String
+  organization    Organization       @relation(fields: [organizationId], references: [id])
+  departmentId    String
+  department      Department         @relation(fields: [departmentId], references: [id])
+  categoryId      String
+  category        DepartmentCategory @relation(fields: [categoryId], references: [id])
+  areaId          String?
+  area            Area?              @relation(fields: [areaId], references: [id])
+  assetId         String?
+  asset           Asset?             @relation(fields: [assetId], references: [id])
+  memberId        String
+  member          User               @relation("SubmittedComplaints", fields: [memberId], references: [id])
+  assignedStaffId String?
+  assignedStaff   User?              @relation("AssignedComplaints", fields: [assignedStaffId], references: [id])
+
+  title       String
+  description String
+  status      ComplaintStatus @default(PENDING)
+  priority    Priority        @default(MEDIUM)
+  location    String? // free-text fallback until area picker is universal
+  votes       Int             @default(1)
+  escalated   Boolean         @default(false)
+  escalatedAt DateTime?
+  dueAt       DateTime?
+
+  // Dispute is not a status (see ComplaintStatus) — it's recorded here plus
+  // a ComplaintEvent{type: DISPUTED}, and disputing reopens status to
+  // IN_PROGRESS rather than parking the complaint in a dedicated state.
+  disputeReason   String?
+  disputeEvidence String?
+  disputedAt      DateTime?
+
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  events      ComplaintEvent[]
+  comments    ComplaintComment[]
+  attachments ComplaintAttachment[]
+
+  @@index([organizationId])
+  @@index([departmentId, status])
+  @@index([memberId])
+  @@index([assignedStaffId])
+  @@index([categoryId])
+}
+
+model ComplaintEvent {
+  id             String             @id @default(cuid())
+  complaintId    String
+  complaint      Complaint          @relation(fields: [complaintId], references: [id])
+  organizationId String
+  type           ComplaintEventType
+  fromValue      String?
+  toValue        String?
+  actorId        String?
+  actor          User?              @relation("EventActor", fields: [actorId], references: [id])
+  note           String?
+  createdAt      DateTime           @default(now())
+
+  @@index([complaintId])
+  @@index([organizationId])
+}
+
+model ComplaintComment {
+  id             String    @id @default(cuid())
+  complaintId    String
+  complaint      Complaint @relation(fields: [complaintId], references: [id])
+  organizationId String
+  authorId       String
+  author         User      @relation(fields: [authorId], references: [id])
+  body           String
+  isInternal     Boolean   @default(false) // staff-only note vs member-visible update
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([complaintId])
+}
+
+model ComplaintAttachment {
+  id             String    @id @default(cuid())
+  complaintId    String
+  complaint      Complaint @relation(fields: [complaintId], references: [id])
+  organizationId String
+  uploadedById   String
+  uploadedBy     User      @relation(fields: [uploadedById], references: [id])
+  url            String
+  fileType       String?
+  sizeBytes      Int?
+  createdAt      DateTime  @default(now())
+
+  @@index([complaintId])
+}
+
+// ─────────────────────────────────────────────────────────
+// Notifications & Audit
+// ─────────────────────────────────────────────────────────
+
+model Notification {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  userId         String
+  user           User             @relation(fields: [userId], references: [id])
+  type           NotificationType
+  title          String
+  message        String
+  entityType     String?
+  entityId       String?
+  isRead         Boolean          @default(false)
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([organizationId])
+}
+
+model AuditLog {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  actorId        String?
+  actor          User?         @relation(fields: [actorId], references: [id])
+  action         AuditAction
+  entityType     String
+  entityId       String?
+  description    String?
+  metadata       Json?
+  ipAddress      String?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId])
+  @@index([entityType, entityId])
+  @@index([actorId])
+}
+
+// ─────────────────────────────────────────────────────────
+// AI Insights
+// ─────────────────────────────────────────────────────────
+
+model ComplaintInsight {
+  id              BigInt       @id @default(autoincrement())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  departmentId    String?
+  department      Department?  @relation(fields: [departmentId], references: [id])
+  createdAt       DateTime     @default(now())
+  summary         String?
+  observations    Json?
+  hypotheses      Json?
+  anomalies       Json?
+  recommendations Json?
+  complaintCount  Int?
+
+  @@index([organizationId])
+  @@index([departmentId])
+}
+
+// ─────────────────────────────────────────────────────────
+// Chatbot — carried over from the existing product, not redesigned here.
+// organizationId added because a User is no longer org-scoped, so a chat
+// session must record which org context it belongs to.
+// ─────────────────────────────────────────────────────────
+
+model ChatSession {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userRole       Role
+  lastMessage    String       @default("")
+  messageCount   Int          @default(0)
+  isActive       Boolean      @default(true)
+  context        Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  messages ChatMessage[]
+
+  @@index([userId])
+  @@index([organizationId])
+}
+
+model ChatMessage {
+  id          String      @id @default(cuid())
+  sessionId   String
+  session     ChatSession @relation(fields: [sessionId], references: [id])
+  sender      String // 'user' | 'ai'
+  content     String
+  messageType String      @default("text")
+  metadata    Json        @default("{}")
+  createdAt   DateTime    @default(now())
+
+  @@index([sessionId])
+}

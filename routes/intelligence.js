@@ -1,146 +1,138 @@
 const express = require('express');
 const router = express.Router();
+const prisma = require('../prisma/client');
 const ResoBridgeIntelligence = require('../utils/resobridgeIntelligence');
-const Complaint = require('../models/Complaint');
-const Hall = require('../models/Hall');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticate, authorizeRoles } = require('../middleware/authenticate');
 
 const intelligence = new ResoBridgeIntelligence();
 
+router.use(authenticate, authorizeRoles('ORG_ADMIN', 'ADMIN'));
+
+// A missing AdminScope row must fail closed (403), not be treated as
+// unrestricted — same distinction as authorizeDepartment in
+// middleware/authenticate.js: only an AdminScope that *explicitly* has an
+// empty departmentIds array means "all departments in the org."
+router.use((req, res, next) => {
+  if (req.user.role === 'ADMIN' && !req.user.adminScope) {
+    return res.status(403).json({ success: false, message: 'No admin scope configured for this account.' });
+  }
+  next();
+});
+
+// ADMIN is restricted to their AdminScope.departmentIds (empty = all
+// departments in the org); ORG_ADMIN is unrestricted within their org.
+// The old version queried Complaint/Hall globally with no org filter at
+// all — that was a cross-tenant leak, not a stylistic gap, fixed here.
+function complaintScope(req) {
+  const { role, organizationId, adminScope } = req.user;
+  const where = { organizationId };
+  if (role === 'ADMIN') {
+    const scopedIds = adminScope.departmentIds || [];
+    if (scopedIds.length > 0) where.departmentId = { in: scopedIds };
+  }
+  return where;
+}
+
 // Get comprehensive intelligence analysis
-router.get('/analysis', authenticateToken, async (req, res) => {
+router.get('/analysis', async (req, res) => {
   try {
     const { timeRange = 30 } = req.query;
-    
-    // Fetch complaints with populated data
-    const complaints = await Complaint.find()
-      .populate('complaintTypeId', 'name')
-      .populate('hallId', 'name')
-      .populate('userId', 'fullName')
-      .sort({ createdAt: -1 });
 
-    // Fetch all halls
-    const halls = await Hall.find();
+    const complaints = await prisma.complaint.findMany({
+      where: complaintScope(req),
+      include: { category: true, area: { include: { building: true } }, member: { select: { fullName: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
 
-    // Generate comprehensive analysis
-    const analysis = await intelligence.generateComprehensiveAnalysis(
-      complaints, 
-      halls, 
-      parseInt(timeRange)
-    );
+    const buildings = await prisma.building.findMany({ where: { organizationId: req.user.organizationId } });
+
+    const analysis = await intelligence.generateComprehensiveAnalysis(complaints, buildings, parseInt(timeRange));
 
     if (!analysis.success) {
-      return res.status(500).json({ 
-        success: false, 
+      return res.status(500).json({
+        success: false,
         message: 'Failed to generate intelligence analysis',
-        error: analysis.error 
+        error: analysis.error,
       });
     }
 
-    res.json({
-      success: true,
-      data: analysis
-    });
-
+    res.json({ success: true, data: analysis });
   } catch (error) {
     console.error('Intelligence analysis error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error during intelligence analysis' 
-    });
+    res.status(500).json({ success: false, message: 'Server error during intelligence analysis' });
   }
 });
 
 // Get category trend analysis
-router.get('/trends', authenticateToken, async (req, res) => {
+router.get('/trends', async (req, res) => {
   try {
     const { timeRange = 30 } = req.query;
-    
-    const complaints = await Complaint.find()
-      .populate('complaintTypeId', 'name')
-      .sort({ createdAt: -1 });
+
+    const complaints = await prisma.complaint.findMany({
+      where: complaintScope(req),
+      include: { category: true },
+      orderBy: { createdAt: 'desc' },
+    });
 
     const trends = await intelligence.analyzeCategoryTrends(complaints, parseInt(timeRange));
 
-    res.json({
-      success: true,
-      data: trends
-    });
-
+    res.json({ success: true, data: trends });
   } catch (error) {
     console.error('Trend analysis error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error during trend analysis' 
-    });
+    res.status(500).json({ success: false, message: 'Server error during trend analysis' });
   }
 });
 
 // Get infrastructure weak points
-router.get('/weak-points', authenticateToken, async (req, res) => {
+router.get('/weak-points', async (req, res) => {
   try {
-    const complaints = await Complaint.find()
-      .populate('complaintTypeId', 'name')
-      .populate('hallId', 'name')
-      .sort({ createdAt: -1 });
-
-    const halls = await Hall.find();
-
-    const weakPoints = await intelligence.analyzeInfrastructureWeakPoints(complaints, halls);
-
-    res.json({
-      success: true,
-      data: weakPoints
+    const complaints = await prisma.complaint.findMany({
+      where: complaintScope(req),
+      include: { category: true, area: { include: { building: true } } },
+      orderBy: { createdAt: 'desc' },
     });
 
+    const buildings = await prisma.building.findMany({ where: { organizationId: req.user.organizationId } });
+
+    const weakPoints = await intelligence.analyzeInfrastructureWeakPoints(complaints, buildings);
+
+    res.json({ success: true, data: weakPoints });
   } catch (error) {
     console.error('Weak points analysis error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error during weak points analysis' 
-    });
+    res.status(500).json({ success: false, message: 'Server error during weak points analysis' });
   }
 });
 
 // Get AI-powered summary
-router.get('/summary', authenticateToken, async (req, res) => {
+router.get('/summary', async (req, res) => {
   try {
-    const complaints = await Complaint.find()
-      .populate('complaintTypeId', 'name')
-      .populate('hallId', 'name')
-      .sort({ createdAt: -1 });
+    const complaints = await prisma.complaint.findMany({
+      where: complaintScope(req),
+      include: { category: true, area: { include: { building: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
 
-    const halls = await Hall.find();
-
-    // Prepare analytics data
     const analyticsData = {
       totalComplaints: complaints.length,
-      resolved: complaints.filter(c => c.status === 'Resolved').length,
-      resolutionRate: complaints.length > 0 ? 
-        Math.round((complaints.filter(c => c.status === 'Resolved').length / complaints.length) * 100) : 0,
+      resolved: complaints.filter(c => c.status === 'RESOLVED').length,
+      resolutionRate: complaints.length > 0
+        ? Math.round((complaints.filter(c => c.status === 'RESOLVED').length / complaints.length) * 100)
+        : 0,
       topCategories: [],
-      trends: []
+      trends: [],
     };
 
-    // Get category trends for summary
     const trends = await intelligence.analyzeCategoryTrends(complaints, 30);
     analyticsData.trends = trends.trends || [];
     analyticsData.topCategories = trends.trends?.slice(0, 5) || [];
 
     const summary = await intelligence.generateAnalyticsSummary(analyticsData);
 
-    res.json({
-      success: true,
-      data: summary
-    });
-
+    res.json({ success: true, data: summary });
   } catch (error) {
     console.error('Summary generation error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error during summary generation' 
-    });
+    res.status(500).json({ success: false, message: 'Server error during summary generation' });
   }
 });
 
-module.exports = router; 
+module.exports = router;

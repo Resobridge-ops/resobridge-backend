@@ -19,25 +19,32 @@ module.exports = {
 
   // Role-based access control
   roleAccess: {
-    student: {
+    MEMBER: {
       canViewOwnComplaints: true,
       canSubmitComplaints: true,
-      canViewUniversityInfo: true,
+      canViewOrganizationInfo: true,
       canAccessChatbot: true
     },
-    hallporter: {
-      canViewHallComplaints: true,
+    STAFF: {
+      canViewDepartmentComplaints: true,
       canUpdateComplaintStatus: true,
-      canViewHallInfo: true,
+      canViewDepartmentInfo: true,
       canAccessChatbot: true
     },
-    admin: {
-      canViewAllComplaints: true,
+    ADMIN: {
+      canViewScopedComplaints: true,
       canManageUsers: true,
       canViewAnalytics: true,
       canAccessChatbot: true
     },
-    superadmin: {
+    ORG_ADMIN: {
+      canViewAllComplaints: true,
+      canManageUsers: true,
+      canViewAnalytics: true,
+      canManageAdmins: true,
+      canAccessChatbot: true
+    },
+    SUPERADMIN: {
       canViewAllComplaints: true,
       canManageUsers: true,
       canViewAnalytics: true,

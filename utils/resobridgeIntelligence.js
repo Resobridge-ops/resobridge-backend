@@ -1,6 +1,5 @@
 const axios = require('axios');
 const moment = require('moment');
-const _ = require('lodash');
 
 class ResoBridgeIntelligence {
   constructor() {
@@ -21,7 +20,7 @@ class ResoBridgeIntelligence {
       
       complaints.forEach(complaint => {
         const complaintDate = moment(complaint.createdAt);
-        const category = complaint.complaintTypeId?.name || 'Unknown';
+        const category = complaint.category?.name || 'Unknown';
         
         if (!categoryData[category]) {
           categoryData[category] = {
@@ -74,42 +73,46 @@ class ResoBridgeIntelligence {
   }
 
   // Infrastructure Weak Point Discovery
-  async analyzeInfrastructureWeakPoints(complaints, halls) {
+  // Complaints with no area attached (the area picker is optional, per the
+  // free-text location fallback) can't be attributed to a building and are
+  // skipped here — that's a data-completeness gap, not a bug.
+  async analyzeInfrastructureWeakPoints(complaints, buildings) {
     try {
       const weakPoints = [];
-      
-      // Group complaints by hall and category
-      const hallComplaints = {};
-      
+
+      // Group complaints by building and category
+      const buildingComplaints = {};
+
       complaints.forEach(complaint => {
-        const hallId = complaint.hallId?._id || complaint.hallId;
-        const category = complaint.complaintTypeId?.name || 'Unknown';
-        
-        if (!hallComplaints[hallId]) {
-          hallComplaints[hallId] = {};
+        const buildingId = complaint.area?.building?.id || complaint.area?.buildingId;
+        if (!buildingId) return;
+        const category = complaint.category?.name || 'Unknown';
+
+        if (!buildingComplaints[buildingId]) {
+          buildingComplaints[buildingId] = {};
         }
-        
-        if (!hallComplaints[hallId][category]) {
-          hallComplaints[hallId][category] = 0;
+
+        if (!buildingComplaints[buildingId][category]) {
+          buildingComplaints[buildingId][category] = 0;
         }
-        
-        hallComplaints[hallId][category]++;
+
+        buildingComplaints[buildingId][category]++;
       });
 
-      // Find halls with high complaint volumes for specific categories
-      for (const [hallId, categories] of Object.entries(hallComplaints)) {
-        const hall = halls.find(h => h._id.toString() === hallId);
-        const hallName = hall?.name || `Hall ${hallId}`;
-        
+      // Find buildings with high complaint volumes for specific categories
+      for (const [buildingId, categories] of Object.entries(buildingComplaints)) {
+        const building = buildings.find(b => b.id === buildingId);
+        const buildingName = building?.name || `Building ${buildingId}`;
+
         for (const [category, count] of Object.entries(categories)) {
           if (count >= 3) { // Threshold for weak point detection
             weakPoints.push({
-              hallId,
-              hallName,
+              buildingId,
+              buildingName,
               category,
               complaintCount: count,
               severity: count >= 5 ? 'high' : count >= 3 ? 'medium' : 'low',
-              recommendation: this.generateInfrastructureRecommendation(category, hallName, count)
+              recommendation: this.generateInfrastructureRecommendation(category, buildingName, count)
             });
           }
         }
@@ -133,18 +136,18 @@ class ResoBridgeIntelligence {
   }
 
   // Generate infrastructure recommendations
-  generateInfrastructureRecommendation(category, hallName, count) {
+  generateInfrastructureRecommendation(category, buildingName, count) {
     const recommendations = {
-      'Maintenance': `Consider upgrading maintenance systems in ${hallName}. High volume suggests systemic issues.`,
-      'Security': `Review security protocols in ${hallName}. Consider additional security measures.`,
-      'Water': `Water system in ${hallName} may need inspection. Consider plumbing upgrades.`,
-      'Electrical': `Electrical systems in ${hallName} require attention. Schedule safety inspection.`,
-      'Cleaning': `Increase cleaning frequency in ${hallName}. Consider hiring additional staff.`,
-      'Noise': `Implement noise reduction measures in ${hallName}. Consider soundproofing.`,
-      'Internet': `Upgrade internet infrastructure in ${hallName}. Consider network optimization.`
+      'Maintenance': `Consider upgrading maintenance systems in ${buildingName}. High volume suggests systemic issues.`,
+      'Security': `Review security protocols in ${buildingName}. Consider additional security measures.`,
+      'Water': `Water system in ${buildingName} may need inspection. Consider plumbing upgrades.`,
+      'Electrical': `Electrical systems in ${buildingName} require attention. Schedule safety inspection.`,
+      'Cleaning': `Increase cleaning frequency in ${buildingName}. Consider hiring additional staff.`,
+      'Noise': `Implement noise reduction measures in ${buildingName}. Consider soundproofing.`,
+      'Internet': `Upgrade internet infrastructure in ${buildingName}. Consider network optimization.`
     };
 
-    return recommendations[category] || `Investigate ${category} issues in ${hallName}. ${count} complaints indicate systemic problems.`;
+    return recommendations[category] || `Investigate ${category} issues in ${buildingName}. ${count} complaints indicate systemic problems.`;
   }
 
   // LLM-powered Analytics Summary
@@ -236,17 +239,19 @@ class ResoBridgeIntelligence {
   }
 
   // Comprehensive Intelligence Analysis
-  async generateComprehensiveAnalysis(complaints, halls, timeRange = 30) {
+  async generateComprehensiveAnalysis(complaints, buildings, timeRange = 30) {
     try {
       // Get all analyses
       const categoryTrends = await this.analyzeCategoryTrends(complaints, timeRange);
-      const weakPoints = await this.analyzeInfrastructureWeakPoints(complaints, halls);
-      
+      const weakPoints = await this.analyzeInfrastructureWeakPoints(complaints, buildings);
+
       // Prepare analytics data for summary
       const analyticsData = {
         totalComplaints: complaints.length,
-        resolved: complaints.filter(c => c.status === 'Resolved').length,
-        resolutionRate: Math.round((complaints.filter(c => c.status === 'Resolved').length / complaints.length) * 100),
+        resolved: complaints.filter(c => c.status === 'RESOLVED').length,
+        resolutionRate: complaints.length > 0
+          ? Math.round((complaints.filter(c => c.status === 'RESOLVED').length / complaints.length) * 100)
+          : 0,
         topCategories: categoryTrends.trends?.slice(0, 5) || [],
         trends: categoryTrends.trends || []
       };
