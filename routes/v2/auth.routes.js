@@ -833,4 +833,77 @@ router.post("/change-password", authenticate, async (req, res) => {
   }
 });
 
+// ── Self-service profile (Settings page) ───────────────────────
+// Deliberately narrow: email is the login identity (not editable here,
+// would need re-verification) and memberId/position are org-internal
+// reference fields an admin assigns via /admin/staff, not self-service.
+// fullName is the only field a person can change about themselves.
+
+router.get("/me", authenticate, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        isPlatformSuperadmin: true,
+        forcePasswordReset: true,
+        lastLoginAt: true,
+        createdAt: true,
+      },
+    });
+
+    if (req.user.isPlatformSuperadmin) {
+      return res.json({ success: true, data: { ...user, role: "SUPERADMIN" } });
+    }
+
+    const membership = await prisma.organizationMembership.findUnique({
+      where: { id: req.user.membershipId },
+      select: {
+        role: true,
+        memberId: true,
+        position: true,
+        organization: { select: { id: true, name: true, slug: true } },
+        department: { select: { id: true, name: true } },
+      },
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        ...user,
+        role: membership?.role || req.user.role,
+        memberId: membership?.memberId || null,
+        position: membership?.position || null,
+        organization: membership?.organization || null,
+        department: membership?.department || null,
+      },
+    });
+  } catch (error) {
+    console.error("Fetch profile error:", error);
+    return res.status(500).json({ success: false, message: "Error fetching profile." });
+  }
+});
+
+router.patch("/me", authenticate, async (req, res) => {
+  try {
+    const { fullName } = req.body;
+    if (!fullName || !fullName.trim()) {
+      return res.status(400).json({ success: false, message: "fullName is required." });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { fullName: fullName.trim() },
+      select: { id: true, email: true, fullName: true },
+    });
+
+    return res.json({ success: true, message: "Profile updated.", data: user });
+  } catch (error) {
+    console.error("Update profile error:", error);
+    return res.status(500).json({ success: false, message: "Error updating profile." });
+  }
+});
+
 module.exports = router;
