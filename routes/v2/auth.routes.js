@@ -62,6 +62,48 @@ function canManageStaffFor(reqUser) {
   return false;
 }
 
+// ── Public org lookup (pre-auth) ────────────────────────────
+// Needed by the org-gate and both signup forms: a prospective member or
+// staff requester has no account yet, so they can't hit the authenticated
+// department.routes.js endpoints. Both routes below return only what's
+// needed to resolve context and populate a department picker — nothing
+// sensitive (no counts, no internal ids beyond what's required to submit
+// the actual registration).
+
+router.get("/organizations/:slug", async (req, res) => {
+  try {
+    const organization = await prisma.organization.findUnique({
+      where: { slug: req.params.slug },
+      select: { id: true, name: true, slug: true, registrationMode: true },
+    });
+    if (!organization) {
+      return res.status(404).json({ success: false, message: "Organization not found." });
+    }
+    return res.json({ success: true, data: organization });
+  } catch (error) {
+    console.error("Organization lookup error:", error);
+    return res.status(500).json({ success: false, message: "Server error." });
+  }
+});
+
+router.get("/organizations/:slug/departments", async (req, res) => {
+  try {
+    const organization = await findOrganizationBySlug(req.params.slug);
+    if (!organization) {
+      return res.status(404).json({ success: false, message: "Organization not found." });
+    }
+    const departments = await prisma.department.findMany({
+      where: { organizationId: organization.id, status: "ACTIVE" },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    });
+    return res.json({ success: true, data: departments });
+  } catch (error) {
+    console.error("Organization department lookup error:", error);
+    return res.status(500).json({ success: false, message: "Server error." });
+  }
+});
+
 // ── MEMBER self-registration ──────────────────────────────
 
 router.post("/register", async (req, res) => {
@@ -610,14 +652,6 @@ router.post("/login", async (req, res) => {
     }
 
     if (user.isPlatformSuperadmin) {
-      if (user.forcePasswordReset) {
-        return res.status(403).json({
-          success: false,
-          message: "You must reset your password before continuing.",
-          forcePasswordReset: true,
-          email: user.email,
-        });
-      }
       const token = signToken({ userId: user.id });
       await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
       return res.json({
@@ -628,6 +662,11 @@ router.post("/login", async (req, res) => {
         userId: user.id,
         email: user.email,
         fullName: user.fullName,
+        // A token is issued either way — the frontend routes to a
+        // set-new-password screen on this flag and calls the authenticated
+        // /auth/change-password endpoint, rather than the request failing
+        // outright with no usable token to act on.
+        forcePasswordReset: user.forcePasswordReset,
       });
     }
 
@@ -660,15 +699,6 @@ router.post("/login", async (req, res) => {
       return res.status(403).json({ success: false, message: "Your account is pending approval." });
     }
 
-    if (user.forcePasswordReset) {
-      return res.status(403).json({
-        success: false,
-        message: "You must reset your password before accessing the dashboard.",
-        forcePasswordReset: true,
-        email: user.email,
-      });
-    }
-
     const token = signToken({
       userId: user.id,
       organizationId: membership.organizationId,
@@ -693,6 +723,9 @@ router.post("/login", async (req, res) => {
       userId: user.id,
       email: user.email,
       fullName: user.fullName,
+      // See the SUPERADMIN branch above for why this is a flag on a
+      // successful response rather than a 403 with no token.
+      forcePasswordReset: user.forcePasswordReset,
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -759,6 +792,44 @@ router.post("/reset-password", async (req, res) => {
   } catch (error) {
     console.error("Reset password error:", error);
     return res.status(500).json({ success: false, message: "Error resetting password." });
+  }
+});
+
+// Authenticated password change. Two callers: the forced-reset flow (a new
+// ORG_ADMIN or approved STAFF logging in with a temp password for the first
+// time — see forcePasswordReset on User) and, later, Settings for a normal
+// voluntary password change. Both just need to prove they know the current
+// password; unlike /reset-password there's no emailed token involved.
+router.post("/change-password", authenticate, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: "currentPassword and newPassword are required." });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ success: false, message: "newPassword must be at least 8 characters." });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user?.password) {
+      return res.status(400).json({ success: false, message: "This account has no password set." });
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, message: "Current password is incorrect." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { password: hashedPassword, forcePasswordReset: false },
+    });
+
+    return res.json({ success: true, message: "Password updated." });
+  } catch (error) {
+    console.error("Change password error:", error);
+    return res.status(500).json({ success: false, message: "Error updating password." });
   }
 });
 
