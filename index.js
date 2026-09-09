@@ -45,6 +45,7 @@ const departmentRoutes = require("./routes/v2/department.routes");
 const infrastructureRoutes = require("./routes/v2/infrastructure.routes");
 const complaintRoutes = require("./routes/v2/complaint.routes");
 const adminRoutes = require("./routes/v2/admin.routes");
+const notificationRoutes = require("./routes/v2/notification.routes");
 const chatbotRoutes = require("./routes/chatbot.js");
 const intelligenceRoutes = require("./routes/intelligence.js");
 
@@ -53,6 +54,7 @@ app.use("/api/v2/departments", departmentRoutes);
 app.use("/api/v2/infrastructure", infrastructureRoutes);
 app.use("/api/v2/complaints", complaintRoutes);
 app.use("/api/v2/admin", adminRoutes);
+app.use("/api/v2/notifications", notificationRoutes);
 app.use("/api/v2/chatbot", chatbotRoutes);
 app.use("/api/v2/intelligence", intelligenceRoutes);
 
