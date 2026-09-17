@@ -125,8 +125,14 @@ router.delete("/:departmentId", authorizeRoles("ORG_ADMIN"), authorizeDepartment
 });
 
 // ── Department categories ───────────────────────────────────
+// Reads are org-wide for any authenticated role, same as buildings/areas/
+// assets in infrastructure.routes.js — every role needs to browse every
+// department's categories to submit a request (TARGET.md: "same category
+// picker" for everyone), not just their own home department. Writes stay
+// authorizeDepartment-gated below (ORG_ADMIN anywhere, DEPT_ADMIN only
+// within their own scope).
 
-router.get("/:departmentId/categories", authorizeDepartment, async (req, res) => {
+router.get("/:departmentId/categories", async (req, res) => {
   try {
     const categories = await prisma.departmentCategory.findMany({
       where: {
