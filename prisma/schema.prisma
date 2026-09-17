@@ -89,6 +89,10 @@ enum ComplaintEventType {
   ATTACHMENT_ADDED
   DISPUTED
   CONFIRMED
+  // A RESOLVED request reopened via the dedicated ORG_ADMIN-only Reopen
+  // action (TARGET.md) — deliberately distinct from STATUS_CHANGED so the
+  // history clearly shows it was reopened, not just moved.
+  REOPENED
 }
 
 enum NotificationType {

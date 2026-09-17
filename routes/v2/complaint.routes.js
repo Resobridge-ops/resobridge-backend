@@ -20,14 +20,18 @@
 // complaint they're assigned to along the legal path
 // PENDING -> IN_PROGRESS -> AWAITING_CONFIRMATION. RESOLVED is only ever
 // reached by the submitter confirming (PUT /confirm) or a DEPT_ADMIN/
-// ORG_ADMIN override. DEPT_ADMIN/ORG_ADMIN can force any transition —
-// that's a deliberate override valve, not an oversight.
+// ORG_ADMIN override. DEPT_ADMIN/ORG_ADMIN can force most transitions —
+// that's a deliberate override valve, not an oversight — but per
+// TARGET.md, RESOLVED is closed: PATCH /status refuses to move a
+// complaint OUT of RESOLVED for any role, override included. The only
+// way back is PUT /:complaintId/reopen (ORG_ADMIN only, reason required,
+// its own REOPENED event — not the generic status endpoint).
 //
 // Dispute is not a status (see prisma/schema.prisma's ComplaintStatus
 // comment) — PUT /dispute reopens to IN_PROGRESS and records the dispute on
-// the complaint plus a DISPUTED ComplaintEvent for the timeline. Per
-// TARGET.md, RESOLVED is closed for the MVP: dispute is only available
-// while AWAITING_CONFIRMATION, not after confirmation.
+// the complaint plus a DISPUTED ComplaintEvent for the timeline. Dispute is
+// only available while AWAITING_CONFIRMATION, not after confirmation —
+// once genuinely RESOLVED, Reopen is the only path back.
 
 const express = require("express");
 const router = express.Router();
@@ -353,6 +357,13 @@ router.patch("/:complaintId/status", authorizeRoles("STAFF", "DEPT_ADMIN", "ORG_
     const { status, note } = req.body;
     if (!status) return res.status(400).json({ success: false, message: "status is required." });
 
+    // RESOLVED is closed (TARGET.md) — nothing can leave it through this
+    // generic endpoint, including the DEPT_ADMIN/ORG_ADMIN override below.
+    // The only way back is the dedicated PUT /:complaintId/reopen action.
+    if (complaint.status === "RESOLVED") {
+      return res.status(400).json({ success: false, message: "This request is resolved and closed. Use Reopen instead." });
+    }
+
     if (req.user.role === "STAFF") {
       if (complaint.assignedStaffId !== req.user.id) {
         return res.status(403).json({ success: false, message: "You are not assigned to this request." });
@@ -364,7 +375,8 @@ router.patch("/:complaintId/status", authorizeRoles("STAFF", "DEPT_ADMIN", "ORG_
         return res.status(400).json({ success: false, message: `Cannot move from ${complaint.status} to ${status}.` });
       }
     }
-    // DEPT_ADMIN / ORG_ADMIN: override valve, no transition-table restriction.
+    // DEPT_ADMIN / ORG_ADMIN: override valve for everything except leaving
+    // RESOLVED (blocked above) — no transition-table restriction otherwise.
 
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.complaint.update({
@@ -400,6 +412,73 @@ router.patch("/:complaintId/status", authorizeRoles("STAFF", "DEPT_ADMIN", "ORG_
     return res.json({ success: true, data: updated });
   } catch (error) {
     console.error("Update complaint status error:", error);
+    return res.status(500).json({ success: false, message: "Server error." });
+  }
+});
+
+// ── Reopen (ORG_ADMIN only) ──────────────────────────────────
+// The sanctioned exception to "RESOLVED is closed" (TARGET.md): a
+// dedicated, audited action, not a side door through the generic status
+// endpoint. requireScope: true for consistency with the other operational
+// endpoints, though it's a no-op in practice since only ORG_ADMIN (always
+// unrestricted within its org) can reach this route.
+
+router.put("/:complaintId/reopen", authorizeRoles("ORG_ADMIN"), async (req, res) => {
+  try {
+    const complaint = await findComplaintForUser(req, req.params.complaintId, { requireScope: true });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
+
+    if (complaint.status !== "RESOLVED") {
+      return res.status(400).json({ success: false, message: "Only a resolved request can be reopened." });
+    }
+
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ success: false, message: "A reason is required to reopen a request." });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.complaint.update({
+        where: { id: complaint.id },
+        // resolvedAt is cleared — it's no longer resolved, and leaving it
+        // set would still count this complaint toward avgResolutionHours
+        // (that calculation filters on resolvedAt being non-null, not on
+        // status, in GET /admin/dashboard).
+        data: { status: "IN_PROGRESS", resolvedAt: null },
+      });
+      await tx.complaintEvent.create({
+        data: {
+          complaintId: complaint.id,
+          organizationId: req.user.organizationId,
+          type: "REOPENED",
+          fromValue: "RESOLVED",
+          toValue: "IN_PROGRESS",
+          actorId: req.user.id,
+          note: reason.trim(),
+        },
+      });
+      return result;
+    });
+
+    const recipients = [complaint.memberId, complaint.assignedStaffId].filter(
+      (userId, index, all) => userId && all.indexOf(userId) === index,
+    );
+    await Promise.all(
+      recipients.map((userId) =>
+        notify({
+          organizationId: req.user.organizationId,
+          userId,
+          type: "COMPLAINT_STATUS_CHANGED",
+          title: "Request reopened",
+          message: `${complaint.title}: ${reason.trim()}`,
+          entityId: complaint.id,
+        }),
+      ),
+    );
+
+    return res.json({ success: true, message: "Request reopened.", data: updated });
+  } catch (error) {
+    console.error("Reopen request error:", error);
     return res.status(500).json({ success: false, message: "Server error." });
   }
 });
