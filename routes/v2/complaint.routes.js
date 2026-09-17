@@ -177,7 +177,7 @@ router.post("/", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN", "STAFF", "REQUESTER")
             organizationId: req.user.organizationId,
             userId: m.userId,
             type: "COMPLAINT_SUBMITTED",
-            title: "New complaint submitted",
+            title: "New request submitted",
             message: `${title} (${category.name})`,
             entityId: complaint.id,
           })
@@ -190,7 +190,7 @@ router.post("/", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN", "STAFF", "REQUESTER")
     return res.status(201).json({ success: true, data: complaint });
   } catch (error) {
     console.error("Submit complaint error:", error);
-    return res.status(500).json({ success: false, message: "Something went wrong submitting the complaint." });
+    return res.status(500).json({ success: false, message: "Something went wrong submitting the request." });
   }
 });
 
@@ -255,7 +255,7 @@ router.get("/:complaintId", async (req, res) => {
         assignedStaff: { select: { id: true, fullName: true, email: true } },
       },
     });
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
     return res.json({ success: true, data: complaint });
   } catch (error) {
     console.error("Get complaint error:", error);
@@ -268,7 +268,7 @@ router.get("/:complaintId", async (req, res) => {
 router.patch("/:complaintId/assign", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId, { requireScope: true });
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
 
     const { assignedStaffId } = req.body;
     if (!assignedStaffId) {
@@ -285,7 +285,7 @@ router.patch("/:complaintId/assign", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), 
       },
     });
     if (!staffMembership) {
-      return res.status(400).json({ success: false, message: "assignedStaffId must be an active staff member of this complaint's department." });
+      return res.status(400).json({ success: false, message: "assignedStaffId must be an active staff member of this request's department." });
     }
 
     const previousStaffId = complaint.assignedStaffId;
@@ -314,7 +314,7 @@ router.patch("/:complaintId/assign", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), 
       organizationId: req.user.organizationId,
       userId: assignedStaffId,
       type: "COMPLAINT_ASSIGNED",
-      title: "Complaint assigned to you",
+      title: "Request assigned to you",
       message: complaint.title,
       entityId: complaint.id,
     });
@@ -348,17 +348,17 @@ router.patch("/:complaintId/assign", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), 
 router.patch("/:complaintId/status", authorizeRoles("STAFF", "DEPT_ADMIN", "ORG_ADMIN"), async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId, { requireScope: true });
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
 
     const { status, note } = req.body;
     if (!status) return res.status(400).json({ success: false, message: "status is required." });
 
     if (req.user.role === "STAFF") {
       if (complaint.assignedStaffId !== req.user.id) {
-        return res.status(403).json({ success: false, message: "You are not assigned to this complaint." });
+        return res.status(403).json({ success: false, message: "You are not assigned to this request." });
       }
       if (!["IN_PROGRESS", "AWAITING_CONFIRMATION"].includes(status)) {
-        return res.status(403).json({ success: false, message: "Staff may only move a complaint to IN_PROGRESS or AWAITING_CONFIRMATION." });
+        return res.status(403).json({ success: false, message: "Staff may only move a request to IN_PROGRESS or AWAITING_CONFIRMATION." });
       }
       if (!ALLOWED_TRANSITIONS[complaint.status]?.includes(status)) {
         return res.status(400).json({ success: false, message: `Cannot move from ${complaint.status} to ${status}.` });
@@ -392,7 +392,7 @@ router.patch("/:complaintId/status", authorizeRoles("STAFF", "DEPT_ADMIN", "ORG_
       organizationId: req.user.organizationId,
       userId: complaint.memberId,
       type: status === "RESOLVED" ? "COMPLAINT_RESOLVED" : "COMPLAINT_STATUS_CHANGED",
-      title: "Your complaint status has changed",
+      title: "Your request status has changed",
       message: `${complaint.title}: ${status}`,
       entityId: complaint.id,
     });
@@ -409,7 +409,7 @@ router.patch("/:complaintId/status", authorizeRoles("STAFF", "DEPT_ADMIN", "ORG_
 router.patch("/:complaintId/escalate", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId, { requireScope: true });
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
 
     const { note } = req.body;
     const updated = await prisma.$transaction(async (tx) => {
@@ -439,7 +439,7 @@ router.patch("/:complaintId/escalate", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN")
             organizationId: req.user.organizationId,
             userId: m.userId,
             type: "COMPLAINT_ESCALATED",
-            title: "Complaint escalated",
+            title: "Request escalated",
             message: complaint.title,
             entityId: complaint.id,
           })
@@ -465,12 +465,12 @@ router.patch("/:complaintId/escalate", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN")
 router.put("/:complaintId/confirm", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId);
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
     if (complaint.memberId !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Only the person who submitted this complaint can confirm it." });
+      return res.status(403).json({ success: false, message: "Only the person who submitted this request can confirm it." });
     }
     if (complaint.status !== "AWAITING_CONFIRMATION") {
-      return res.status(400).json({ success: false, message: "Complaint is not awaiting confirmation." });
+      return res.status(400).json({ success: false, message: "Request is not awaiting confirmation." });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -489,7 +489,7 @@ router.put("/:complaintId/confirm", async (req, res) => {
       return result;
     });
 
-    return res.json({ success: true, message: "Complaint confirmed as resolved.", data: updated });
+    return res.json({ success: true, message: "Request confirmed as resolved.", data: updated });
   } catch (error) {
     console.error("Confirm complaint error:", error);
     return res.status(500).json({ success: false, message: "Server error." });
@@ -499,17 +499,17 @@ router.put("/:complaintId/confirm", async (req, res) => {
 router.put("/:complaintId/dispute", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId);
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
     if (complaint.memberId !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Only the person who submitted this complaint can dispute it." });
+      return res.status(403).json({ success: false, message: "Only the person who submitted this request can dispute it." });
     }
     if (complaint.status !== "AWAITING_CONFIRMATION") {
-      return res.status(400).json({ success: false, message: "Complaint is not awaiting confirmation." });
+      return res.status(400).json({ success: false, message: "Request is not awaiting confirmation." });
     }
 
     const { reason, evidence } = req.body;
     if (!reason || !reason.trim()) {
-      return res.status(400).json({ success: false, message: "A reason is required to dispute a complaint." });
+      return res.status(400).json({ success: false, message: "A reason is required to dispute a request." });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -539,13 +539,13 @@ router.put("/:complaintId/dispute", async (req, res) => {
         organizationId: req.user.organizationId,
         userId: complaint.assignedStaffId,
         type: "COMPLAINT_DISPUTED",
-        title: "Complaint resolution disputed",
+        title: "Request resolution disputed",
         message: `${complaint.title}: ${reason.trim()}`,
         entityId: complaint.id,
       });
     }
 
-    return res.json({ success: true, message: "Complaint disputed.", data: updated });
+    return res.json({ success: true, message: "Request disputed.", data: updated });
   } catch (error) {
     console.error("Dispute complaint error:", error);
     return res.status(500).json({ success: false, message: "Server error." });
@@ -563,7 +563,7 @@ router.put("/:complaintId/dispute", async (req, res) => {
 router.get("/:complaintId/comments", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId);
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
 
     const comments = await prisma.complaintComment.findMany({
       where: {
@@ -583,7 +583,7 @@ router.get("/:complaintId/comments", async (req, res) => {
 router.post("/:complaintId/comments", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId);
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
 
     const { body } = req.body;
     if (!body || !body.trim()) {
@@ -624,7 +624,7 @@ router.post("/:complaintId/comments", async (req, res) => {
 router.post("/:complaintId/attachments", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId);
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
 
     const { url, fileType, sizeBytes } = req.body;
     if (!url) return res.status(400).json({ success: false, message: "url is required." });
@@ -663,7 +663,7 @@ router.post("/:complaintId/attachments", async (req, res) => {
 router.get("/:complaintId/events", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId);
-    if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
 
     const events = await prisma.complaintEvent.findMany({
       where: { complaintId: complaint.id },

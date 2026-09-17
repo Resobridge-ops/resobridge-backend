@@ -61,13 +61,13 @@ async function sendPasswordResetEmail(email, resetLink) {
 async function sendComplaintReceiptEmail(memberEmail, complaintTitle, complaintId) {
   return sendBrevoEmail({
     to: memberEmail,
-    subject: "Complaint Received",
+    subject: "Request Received",
     htmlContent: `
       <p>Hi there,</p>
-      <p>Your complaint has been received on <strong>ResoBridge</strong>.</p>
+      <p>Your request has been received on <strong>ResoBridge</strong>.</p>
       <p><strong>Title:</strong> ${complaintTitle}</p>
       <p><strong>Reference ID:</strong> ${complaintId}</p>
-      <p>Our team will review your complaint and keep you updated.</p>
+      <p>Our team will review your request and keep you updated.</p>
     `,
   });
 }
@@ -94,10 +94,10 @@ async function sendStaffApprovalEmail(email, tempPassword) {
 async function sendAdminAccountEmail(email, fullName, tempPassword) {
   return sendBrevoEmail({
     to: email,
-    subject: "Your ResoBridge Admin Account",
+    subject: "Your ResoBridge Org Admin Account",
     htmlContent: `
       <p>Hi ${fullName || "there"},</p>
-      <p>You have been added as an <strong>Admin</strong> on <strong>ResoBridge</strong>.</p>
+      <p>You have been added as an <strong>Org Admin</strong> on <strong>ResoBridge</strong>.</p>
       <p>Please log in using the following credentials:</p>
       <ul>
         <li><strong>Email:</strong> ${email}</li>
@@ -109,17 +109,17 @@ async function sendAdminAccountEmail(email, fullName, tempPassword) {
   });
 }
 
-// A department's assigned staff member is notified of a new complaint
+// A department's assigned staff member is notified of a new request
 // (was sendPorterNotification, keyed on hallName/roomNumber).
 async function sendComplaintAssignmentEmail(staffEmail, departmentName, complaintId, title, description, location) {
   const dashboardUrl = process.env.FRONTEND_URL || "https://resobridge-dashboard.netlify.app";
   return sendBrevoEmail({
     to: staffEmail,
-    subject: `New Complaint in ${departmentName} (ID: ${complaintId})`,
+    subject: `New Request in ${departmentName} (ID: ${complaintId})`,
     htmlContent: `
-      <h2>New Complaint Submitted</h2>
+      <h2>New Request Submitted</h2>
       <p><b>Department:</b> ${departmentName}</p>
-      <p><b>Complaint ID:</b> ${complaintId}</p>
+      <p><b>Request ID:</b> ${complaintId}</p>
       <p><b>Title:</b> ${title}</p>
       <p><b>Description:</b> ${description}</p>
       ${location ? `<p><b>Location:</b> ${location}</p>` : ""}
