@@ -1,10 +1,10 @@
 // routes/v2/infrastructure.routes.js
 //
 // Buildings, recursive Areas, and Assets. Reads are org-wide for any
-// authenticated role (members need to browse the structure to locate a
-// complaint). Writes are ORG_ADMIN (unrestricted within their org) or ADMIN
-// (scoped via AdminScope.departmentIds, checked through the owning
-// department resolved by walking area -> building -> department, or
+// authenticated role (a requester needs to browse the structure to locate
+// a complaint). Writes are ORG_ADMIN (unrestricted within their org) or
+// DEPT_ADMIN (scoped via AdminScope.departmentIds, checked through the
+// owning department resolved by walking area -> building -> department, or
 // asset -> area -> building -> department).
 //
 // Re-parenting (moving a building to a different department, an area to a
@@ -20,10 +20,10 @@ const { authenticate, authorizeRoles, hasDepartmentAccess } = require("../../mid
 
 router.use(authenticate);
 
-const canWrite = authorizeRoles("ORG_ADMIN", "ADMIN");
+const canWrite = authorizeRoles("ORG_ADMIN", "DEPT_ADMIN");
 
 function requireAdminScope(req, res) {
-  if (req.user.role === "ADMIN" && !req.user.adminScope) {
+  if (req.user.role === "DEPT_ADMIN" && !req.user.adminScope) {
     res.status(403).json({ success: false, message: "No admin scope configured for this account." });
     return false;
   }

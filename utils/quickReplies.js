@@ -1,14 +1,14 @@
 const QUICK_REPLIES = {
-  MEMBER: [
+  REQUESTER: [
     {
-      text: "Submit Complaint",
+      text: "Submit Request",
       action: "complaint_submission",
-      description: "Help with submitting a new complaint"
+      description: "Help with submitting a new request"
     },
     {
-      text: "My Complaints",
+      text: "My Requests",
       action: "view_complaints",
-      description: "Check status of your complaints"
+      description: "Check status of your requests"
     },
     {
       text: "Navigation Help",
@@ -45,7 +45,7 @@ const QUICK_REPLIES = {
     }
   ],
 
-  ADMIN: [
+  DEPT_ADMIN: [
     {
       text: "System Analytics",
       action: "analytics",
@@ -82,8 +82,8 @@ const QUICK_REPLIES = {
   ]
 };
 
-QUICK_REPLIES.ORG_ADMIN = QUICK_REPLIES.ADMIN;
-QUICK_REPLIES.SUPERADMIN = QUICK_REPLIES.ADMIN;
+QUICK_REPLIES.ORG_ADMIN = QUICK_REPLIES.DEPT_ADMIN;
+QUICK_REPLIES.SUPERADMIN = QUICK_REPLIES.DEPT_ADMIN;
 
 function getQuickRepliesForRole(role) {
   const roleReplies = QUICK_REPLIES[role] || [];

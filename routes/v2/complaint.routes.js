@@ -2,16 +2,32 @@
 //
 // Submit, track, assign, update status, confirm, dispute, comment, attach.
 //
+// Per TARGET.md: submitting and tracking a complaint is a baseline
+// capability every authenticated organisation role has (REQUESTER, STAFF,
+// DEPT_ADMIN, ORG_ADMIN) — not a role-exclusive action. Two access rules
+// follow from that, and are deliberately kept separate (see
+// canViewComplaint / canOperateOnComplaint below):
+//   - Viewing/commenting/confirming/disputing a complaint: allowed if you
+//     submitted it yourself, OR you have operational department scope
+//     over it. Being the submitter never requires scope.
+//   - Operating on a complaint (assign/status/escalate): requires
+//     department scope, full stop. Being the submitter of your own
+//     complaint never grants yourself operational rights over it — a
+//     DEPT_ADMIN can't use "I filed this ticket" to bypass their own
+//     department scoping.
+//
 // Status transitions (see ALLOWED_TRANSITIONS): STAFF can only move a
 // complaint they're assigned to along the legal path
 // PENDING -> IN_PROGRESS -> AWAITING_CONFIRMATION. RESOLVED is only ever
-// reached by the member confirming (PUT /confirm) or an ADMIN/ORG_ADMIN
-// override. ADMIN/ORG_ADMIN can force any transition — that's a deliberate
-// override valve, not an oversight.
+// reached by the submitter confirming (PUT /confirm) or a DEPT_ADMIN/
+// ORG_ADMIN override. DEPT_ADMIN/ORG_ADMIN can force any transition —
+// that's a deliberate override valve, not an oversight.
 //
 // Dispute is not a status (see prisma/schema.prisma's ComplaintStatus
 // comment) — PUT /dispute reopens to IN_PROGRESS and records the dispute on
-// the complaint plus a DISPUTED ComplaintEvent for the timeline.
+// the complaint plus a DISPUTED ComplaintEvent for the timeline. Per
+// TARGET.md, RESOLVED is closed for the MVP: dispute is only available
+// while AWAITING_CONFIRMATION, not after confirmation.
 
 const express = require("express");
 const router = express.Router();
@@ -28,18 +44,30 @@ const ALLOWED_TRANSITIONS = {
   RESOLVED: [],
 };
 
-function canAccessComplaint(reqUser, complaint) {
-  if (reqUser.role === "MEMBER") return complaint.memberId === reqUser.id;
+// View access: the submitter always has access to their own complaint
+// (baseline capability, held by every role); everyone else needs
+// departmental resolve/manage scope.
+function canViewComplaint(reqUser, complaint) {
+  if (complaint.memberId === reqUser.id) return true;
   return hasDepartmentAccess(reqUser, complaint.departmentId);
 }
 
-async function findComplaintForUser(req, complaintId, include) {
+// Operational access (assign/status/escalate): department scope only.
+// Submitting a complaint never grants operational rights over it, even to
+// a DEPT_ADMIN/STAFF account whose own department scope wouldn't
+// otherwise cover it.
+function canOperateOnComplaint(reqUser, complaint) {
+  return hasDepartmentAccess(reqUser, complaint.departmentId);
+}
+
+async function findComplaintForUser(req, complaintId, { include, requireScope = false } = {}) {
   const complaint = await prisma.complaint.findFirst({
     where: { id: complaintId, organizationId: req.user.organizationId },
     ...(include && { include }),
   });
   if (!complaint) return null;
-  if (!canAccessComplaint(req.user, complaint)) return null;
+  const hasAccess = requireScope ? canOperateOnComplaint(req.user, complaint) : canViewComplaint(req.user, complaint);
+  if (!hasAccess) return null;
   return complaint;
 }
 
@@ -54,8 +82,10 @@ async function notify({ organizationId, userId, type, title, message, entityId }
 }
 
 // ── Submit ───────────────────────────────────────────────────
+// Baseline capability for every organisation role — SUPERADMIN excluded
+// explicitly since it has no organisation membership to submit as.
 
-router.post("/", authorizeRoles("MEMBER"), async (req, res) => {
+router.post("/", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN", "STAFF", "REQUESTER"), async (req, res) => {
   try {
     const { categoryId, title, description, location, areaId, assetId } = req.body;
     if (!categoryId || !title || !description) {
@@ -133,10 +163,11 @@ router.post("/", authorizeRoles("MEMBER"), async (req, res) => {
       const recipients = await prisma.organizationMembership.findMany({
         where: {
           organizationId: req.user.organizationId,
+          userId: { not: req.user.id }, // don't notify submitters of their own submission
           OR: [
             { role: "ORG_ADMIN" },
-            { role: "ADMIN", adminScope: { departmentIds: { isEmpty: true } } },
-            { role: "ADMIN", adminScope: { departmentIds: { has: category.departmentId } } },
+            { role: "DEPT_ADMIN", adminScope: { departmentIds: { isEmpty: true } } },
+            { role: "DEPT_ADMIN", adminScope: { departmentIds: { has: category.departmentId } } },
           ],
         },
       });
@@ -164,19 +195,23 @@ router.post("/", authorizeRoles("MEMBER"), async (req, res) => {
 });
 
 // ── List / detail ────────────────────────────────────────────
+// ?mine=true is the "My Requests" surface (TARGET.md): every role can ask
+// for just what they personally submitted, overriding their normal
+// work/management scope below. REQUESTER always gets this regardless of
+// the flag — they have no broader scope to fall back to.
 
 router.get("/", async (req, res) => {
   try {
     const { role, id: userId, organizationId, departmentId: userDepartmentId, adminScope } = req.user;
-    const { status, areaId, categoryId, assignedStaffId, priority, departmentId } = req.query;
+    const { status, areaId, categoryId, assignedStaffId, priority, departmentId, mine } = req.query;
 
     const where = { organizationId };
 
-    if (role === "MEMBER") {
+    if (mine === "true" || role === "REQUESTER") {
       where.memberId = userId;
     } else if (role === "STAFF") {
       where.departmentId = userDepartmentId;
-    } else if (role === "ADMIN") {
+    } else if (role === "DEPT_ADMIN") {
       if (!adminScope) {
         return res.status(403).json({ success: false, message: "No admin scope configured for this account." });
       }
@@ -212,11 +247,13 @@ router.get("/", async (req, res) => {
 router.get("/:complaintId", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId, {
-      category: true,
-      area: true,
-      asset: true,
-      member: { select: { id: true, fullName: true, email: true } },
-      assignedStaff: { select: { id: true, fullName: true, email: true } },
+      include: {
+        category: true,
+        area: true,
+        asset: true,
+        member: { select: { id: true, fullName: true, email: true } },
+        assignedStaff: { select: { id: true, fullName: true, email: true } },
+      },
     });
     if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
     return res.json({ success: true, data: complaint });
@@ -228,9 +265,9 @@ router.get("/:complaintId", async (req, res) => {
 
 // ── Assignment ───────────────────────────────────────────────
 
-router.patch("/:complaintId/assign", authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+router.patch("/:complaintId/assign", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
-    const complaint = await findComplaintForUser(req, req.params.complaintId);
+    const complaint = await findComplaintForUser(req, req.params.complaintId, { requireScope: true });
     if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
 
     const { assignedStaffId } = req.body;
@@ -308,9 +345,9 @@ router.patch("/:complaintId/assign", authorizeRoles("ORG_ADMIN", "ADMIN"), async
 
 // ── Status ───────────────────────────────────────────────────
 
-router.patch("/:complaintId/status", authorizeRoles("STAFF", "ADMIN", "ORG_ADMIN"), async (req, res) => {
+router.patch("/:complaintId/status", authorizeRoles("STAFF", "DEPT_ADMIN", "ORG_ADMIN"), async (req, res) => {
   try {
-    const complaint = await findComplaintForUser(req, req.params.complaintId);
+    const complaint = await findComplaintForUser(req, req.params.complaintId, { requireScope: true });
     if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
 
     const { status, note } = req.body;
@@ -327,7 +364,7 @@ router.patch("/:complaintId/status", authorizeRoles("STAFF", "ADMIN", "ORG_ADMIN
         return res.status(400).json({ success: false, message: `Cannot move from ${complaint.status} to ${status}.` });
       }
     }
-    // ADMIN / ORG_ADMIN: override valve, no transition-table restriction.
+    // DEPT_ADMIN / ORG_ADMIN: override valve, no transition-table restriction.
 
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.complaint.update({
@@ -369,14 +406,10 @@ router.patch("/:complaintId/status", authorizeRoles("STAFF", "ADMIN", "ORG_ADMIN
 
 // ── Escalate ─────────────────────────────────────────────────
 
-router.patch("/:complaintId/escalate", authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+router.patch("/:complaintId/escalate", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
-    const complaint = await findComplaintForUser(req, req.params.complaintId);
+    const complaint = await findComplaintForUser(req, req.params.complaintId, { requireScope: true });
     if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
-
-    if (req.user.role === "ADMIN" && !req.user.adminScope?.canEscalate) {
-      return res.status(403).json({ success: false, message: "You do not have permission to escalate complaints." });
-    }
 
     const { note } = req.body;
     const updated = await prisma.$transaction(async (tx) => {
@@ -423,12 +456,19 @@ router.patch("/:complaintId/escalate", authorizeRoles("ORG_ADMIN", "ADMIN"), asy
   }
 });
 
-// ── Member confirm / dispute ────────────────────────────────
+// ── Submitter confirm / dispute ─────────────────────────────
+// Any role can submit a complaint (see module comment), so these gate on
+// being the complaint's submitter, not on role — authenticate() alone
+// admits any authenticated org role here; the ownership check below is
+// the real gate.
 
-router.put("/:complaintId/confirm", authorizeRoles("MEMBER"), async (req, res) => {
+router.put("/:complaintId/confirm", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId);
     if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (complaint.memberId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Only the person who submitted this complaint can confirm it." });
+    }
     if (complaint.status !== "AWAITING_CONFIRMATION") {
       return res.status(400).json({ success: false, message: "Complaint is not awaiting confirmation." });
     }
@@ -456,10 +496,13 @@ router.put("/:complaintId/confirm", authorizeRoles("MEMBER"), async (req, res) =
   }
 });
 
-router.put("/:complaintId/dispute", authorizeRoles("MEMBER"), async (req, res) => {
+router.put("/:complaintId/dispute", async (req, res) => {
   try {
     const complaint = await findComplaintForUser(req, req.params.complaintId);
     if (!complaint) return res.status(404).json({ success: false, message: "Complaint not found." });
+    if (complaint.memberId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Only the person who submitted this complaint can dispute it." });
+    }
     if (complaint.status !== "AWAITING_CONFIRMATION") {
       return res.status(400).json({ success: false, message: "Complaint is not awaiting confirmation." });
     }
@@ -510,6 +553,12 @@ router.put("/:complaintId/dispute", authorizeRoles("MEMBER"), async (req, res) =
 });
 
 // ── Comments ─────────────────────────────────────────────────
+// Internal-comment visibility follows operational scope over this
+// complaint's department, not role — someone viewing purely as the
+// submitter (no department scope) never sees internal notes, even if
+// their role elsewhere is STAFF/DEPT_ADMIN/ORG_ADMIN. Someone with real
+// scope over the department sees everything, including on their own
+// submitted complaint.
 
 router.get("/:complaintId/comments", async (req, res) => {
   try {
@@ -519,7 +568,7 @@ router.get("/:complaintId/comments", async (req, res) => {
     const comments = await prisma.complaintComment.findMany({
       where: {
         complaintId: complaint.id,
-        ...(req.user.role === "MEMBER" && { isInternal: false }),
+        ...(!hasDepartmentAccess(req.user, complaint.departmentId) && { isInternal: false }),
       },
       orderBy: { createdAt: "asc" },
       include: { author: { select: { id: true, fullName: true } } },
@@ -540,7 +589,7 @@ router.post("/:complaintId/comments", async (req, res) => {
     if (!body || !body.trim()) {
       return res.status(400).json({ success: false, message: "body is required." });
     }
-    const isInternal = req.user.role !== "MEMBER" && req.body.isInternal === true;
+    const isInternal = hasDepartmentAccess(req.user, complaint.departmentId) && req.body.isInternal === true;
 
     const comment = await prisma.$transaction(async (tx) => {
       const created = await tx.complaintComment.create({

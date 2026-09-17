@@ -1,7 +1,10 @@
 // routes/v2/department.routes.js
 //
-// Department CRUD is ORG_ADMIN-only (per the role capability matrix).
-// DepartmentCategory CRUD is ORG_ADMIN, or ADMIN with AdminScope.canManageCategories.
+// Department CRUD is ORG_ADMIN-only — creating/renaming/deactivating a
+// department is an org-structure decision, not delegated to DEPT_ADMIN.
+// DepartmentCategory CRUD is ORG_ADMIN (anywhere) or DEPT_ADMIN (within
+// their AdminScope.departmentIds, enforced by authorizeDepartment on each
+// category route) — full rights within scope, no separate capability flag.
 // Deletes are soft (status -> INACTIVE): Department and DepartmentCategory both
 // have dependents (buildings, complaints, memberships) that a hard delete would
 // either orphan or fail against.
@@ -14,9 +17,7 @@ const { authenticate, authorizeRoles, authorizeDepartment } = require("../../mid
 router.use(authenticate);
 
 function canManageCategoriesFor(reqUser) {
-  if (reqUser.role === "ORG_ADMIN") return true;
-  if (reqUser.role === "ADMIN") return !!reqUser.adminScope?.canManageCategories;
-  return false;
+  return reqUser.role === "ORG_ADMIN" || reqUser.role === "DEPT_ADMIN";
 }
 
 // ── Departments ──────────────────────────────────────────────

@@ -27,9 +27,9 @@ enum RegistrationMode {
 enum Role {
   SUPERADMIN
   ORG_ADMIN
-  ADMIN
+  DEPT_ADMIN
   STAFF
-  MEMBER
+  REQUESTER
 }
 
 // Account-level (User) and membership-level (OrganizationMembership) status
@@ -406,7 +406,7 @@ model OrganizationMembership {
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id])
   role           Role
-  departmentId   String? // home department; meaningful for STAFF/MEMBER
+  departmentId   String? // home department; meaningful for STAFF/REQUESTER
   department     Department?  @relation(fields: [departmentId], references: [id])
   memberId       String? // org-internal reference id (was studentId/staffId)
   position       String?
@@ -422,18 +422,17 @@ model OrganizationMembership {
   @@index([departmentId])
 }
 
+// DEPT_ADMIN scoping only — which department(s). A DEPT_ADMIN has full
+// admin rights within their assigned departments; there is deliberately no
+// per-capability permission matrix (see TARGET.md). Reintroduce
+// finer-grained delegation only if a real customer needs it.
 model AdminScope {
-  id                  String                 @id @default(cuid())
-  membershipId        String                 @unique
-  membership          OrganizationMembership @relation(fields: [membershipId], references: [id])
-  departmentIds       String[]               @default([]) // empty = all departments in the org
-  canManageStaff      Boolean                @default(false)
-  canViewAnalytics    Boolean                @default(false)
-  canEscalate         Boolean                @default(false)
-  canExportReports    Boolean                @default(false)
-  canManageCategories Boolean                @default(false)
-  createdAt           DateTime               @default(now())
-  updatedAt           DateTime               @updatedAt
+  id            String                 @id @default(cuid())
+  membershipId  String                 @unique
+  membership    OrganizationMembership @relation(fields: [membershipId], references: [id])
+  departmentIds String[]               @default([]) // empty = all departments in the org
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
 }
 
 // Pre-membership: someone attempting to register into a specific org.
@@ -447,10 +446,10 @@ model PendingUser {
   departmentId   String?
   fullName       String
   email          String
-  // Nullable: MEMBER self-registration collects a password upfront (set here,
-  // moved to User.password on OTP verification). STAFF/ADMIN requests via
-  // /register/staff don't — they get a system-generated temp password only
-  // on admin approval, so this stays null until then.
+  // Nullable: REQUESTER self-registration collects a password upfront (set
+  // here, moved to User.password on OTP verification). STAFF/DEPT_ADMIN
+  // requests via /register/staff don't — they get a system-generated temp
+  // password only on admin approval, so this stays null until then.
   password       String?
   role           Role
   position       String?

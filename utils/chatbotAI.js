@@ -118,7 +118,7 @@ async function generateAIResponse(userMessage, userRole, userId, organizationId)
     return generateOrganizationInfoResponse(organizationId);
   }
 
-  if (userRole === 'MEMBER') {
+  if (userRole === 'REQUESTER') {
     return generateMemberSpecificResponse(message, userId, organizationId);
   }
 
@@ -137,7 +137,7 @@ async function generateOrganizationInfoResponse(organizationId) {
   }
 }
 
-// Generate MEMBER-specific responses (was generateStudentSpecificResponse)
+// Generate REQUESTER-specific responses (was generateStudentSpecificResponse)
 async function generateMemberSpecificResponse(message, userId, organizationId) {
   try {
     if (message.includes('my complaint') || message.includes('my complaints')) {

@@ -129,8 +129,9 @@ async function sendComplaintAssignmentEmail(staffEmail, departmentName, complain
   });
 }
 
-// New: needed for the Invitation flow (ORG_ADMIN/ADMIN inviting a specific
-// person into an organization) — no equivalent existed in the old codebase.
+// New: needed for the Invitation flow (ORG_ADMIN/DEPT_ADMIN inviting a
+// specific person into an organization) — no equivalent existed in the old
+// codebase.
 async function sendInvitationEmail(email, organizationName, role, acceptLink) {
   return sendBrevoEmail({
     to: email,

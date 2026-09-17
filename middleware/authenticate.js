@@ -98,14 +98,14 @@ function authorizeRoles(...roles) {
 // copy that can quietly drift out of sync with it.
 //   SUPERADMIN  -> unrestricted (genuinely cross-org platform staff)
 //   ORG_ADMIN   -> unrestricted *within their own org*
-//   ADMIN       -> AdminScope.departmentIds (empty array = all departments in the org)
-//   STAFF/MEMBER -> forced to their own home department
+//   DEPT_ADMIN  -> AdminScope.departmentIds (empty array = all departments in the org)
+//   STAFF/REQUESTER -> forced to their own home department
 function hasDepartmentAccess(reqUser, departmentId) {
   const { role, departmentId: userDepartmentId, adminScope } = reqUser;
 
   if (role === "SUPERADMIN" || role === "ORG_ADMIN") return true;
 
-  if (role === "ADMIN") {
+  if (role === "DEPT_ADMIN") {
     // A missing AdminScope row (null) is a misconfigured account and must
     // fail closed. Only an AdminScope that explicitly has an empty
     // departmentIds array means "all departments" — those are not the same
@@ -116,7 +116,7 @@ function hasDepartmentAccess(reqUser, departmentId) {
     return !departmentId || scopedIds.includes(departmentId);
   }
 
-  // STAFF / MEMBER
+  // STAFF / REQUESTER
   return !departmentId || departmentId === userDepartmentId;
 }
 
@@ -142,7 +142,7 @@ async function authorizeDepartment(req, res, next) {
     }
   }
 
-  if (role === "ADMIN" && !req.user.adminScope) {
+  if (role === "DEPT_ADMIN" && !req.user.adminScope) {
     return res.status(403).json({ success: false, message: "No admin scope configured for this account." });
   }
 

@@ -1,6 +1,6 @@
 // routes/v2/auth.routes.js
 //
-// Scope for this MVP pass: register (MEMBER, self-serve OTP flow),
+// Scope for this MVP pass: register (REQUESTER, self-serve OTP flow),
 // register/staff (STAFF request, admin-approved with a temp password),
 // verify-otp, resend-otp, login (single endpoint, resolves org membership
 // by organizationSlug or by uniqueness), approve/reject pending staff,
@@ -16,7 +16,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const router = express.Router();
 const prisma = require("../../prisma/client");
-const { authenticate, authorizeRoles } = require("../../middleware/authenticate");
+const { authenticate, authorizeRoles, hasDepartmentAccess } = require("../../middleware/authenticate");
 const {
   sendOtpEmail,
   sendPasswordResetEmail,
@@ -25,7 +25,7 @@ const {
 } = require("../../utils/sendEmail");
 
 const OTP_EXPIRY_MS = 10 * 60 * 1000;
-const PENDING_MEMBER_EXPIRY_MS = 10 * 60 * 1000;
+const PENDING_REQUESTER_EXPIRY_MS = 10 * 60 * 1000;
 const PENDING_STAFF_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // awaiting manual approval, not a timed OTP
 const INVITATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 const RESET_TOKEN_EXPIRY_MS = 10 * 60 * 1000;
@@ -54,12 +54,6 @@ async function logAudit(data) {
   } catch (err) {
     console.error("Audit log write failed:", err);
   }
-}
-
-function canManageStaffFor(reqUser) {
-  if (reqUser.role === "ORG_ADMIN") return true;
-  if (reqUser.role === "ADMIN") return !!reqUser.adminScope?.canManageStaff;
-  return false;
 }
 
 // ── Public org lookup (pre-auth) ────────────────────────────
@@ -104,7 +98,7 @@ router.get("/organizations/:slug/departments", async (req, res) => {
   }
 });
 
-// ── MEMBER self-registration ──────────────────────────────
+// ── REQUESTER self-registration ───────────────────────────
 
 router.post("/register", async (req, res) => {
   try {
@@ -150,16 +144,16 @@ router.post("/register", async (req, res) => {
       update: {
         fullName,
         password: hashedPassword,
-        role: "MEMBER",
-        expiresAt: new Date(Date.now() + PENDING_MEMBER_EXPIRY_MS),
+        role: "REQUESTER",
+        expiresAt: new Date(Date.now() + PENDING_REQUESTER_EXPIRY_MS),
       },
       create: {
         organizationId: organization.id,
         fullName,
         email,
         password: hashedPassword,
-        role: "MEMBER",
-        expiresAt: new Date(Date.now() + PENDING_MEMBER_EXPIRY_MS),
+        role: "REQUESTER",
+        expiresAt: new Date(Date.now() + PENDING_REQUESTER_EXPIRY_MS),
       },
     });
 
@@ -202,6 +196,23 @@ router.post("/register/staff", async (req, res) => {
       return res.status(404).json({ success: false, message: "Organization not found." });
     }
 
+    // Same gate as REQUESTER self-registration (TARGET.md: the staff-request
+    // path must respect registrationMode the same way) — this used to be
+    // ungated entirely, letting anyone request staff access to any org
+    // regardless of INVITE_ONLY/DOMAIN_RESTRICTED.
+    if (organization.registrationMode === "INVITE_ONLY") {
+      return res.status(403).json({ success: false, message: "This organization requires an invitation to join." });
+    }
+    if (organization.registrationMode === "DOMAIN_RESTRICTED" && organization.allowedEmailDomain) {
+      const domain = organization.allowedEmailDomain.toLowerCase();
+      if (!email.toLowerCase().endsWith(`@${domain}`)) {
+        return res.status(400).json({
+          success: false,
+          message: `Registration is restricted to @${organization.allowedEmailDomain} email addresses.`,
+        });
+      }
+    }
+
     const department = await prisma.department.findFirst({
       where: { id: departmentId, organizationId: organization.id },
     });
@@ -242,7 +253,11 @@ router.post("/register/staff", async (req, res) => {
       const approvers = await prisma.organizationMembership.findMany({
         where: {
           organizationId: organization.id,
-          OR: [{ role: "ORG_ADMIN" }, { role: "ADMIN", adminScope: { canManageStaff: true } }],
+          OR: [
+            { role: "ORG_ADMIN" },
+            { role: "DEPT_ADMIN", adminScope: { departmentIds: { isEmpty: true } } },
+            { role: "DEPT_ADMIN", adminScope: { departmentIds: { has: departmentId } } },
+          ],
         },
       });
       if (approvers.length > 0) {
@@ -267,7 +282,7 @@ router.post("/register/staff", async (req, res) => {
   }
 });
 
-// ── OTP verification (MEMBER flow) ──────────────────────────
+// ── OTP verification (REQUESTER flow) ───────────────────────
 
 router.post("/verify-otp", async (req, res) => {
   try {
@@ -325,7 +340,7 @@ router.post("/verify-otp", async (req, res) => {
           role: pendingUser.role,
           memberId: pendingUser.memberId,
           position: pendingUser.position,
-          isApproved: true, // MEMBER self-registration is auto-approved
+          isApproved: true, // REQUESTER self-registration is auto-approved
           status: "ACTIVE",
         },
       });
@@ -403,18 +418,14 @@ router.post("/resend-otp", async (req, res) => {
 
 // ── Approve / reject a pending STAFF request ────────────────
 
-router.patch("/approve/:pendingUserId", authenticate, authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+router.patch("/approve/:pendingUserId", authenticate, authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
-    if (!canManageStaffFor(req.user)) {
-      return res.status(403).json({ success: false, message: "You do not have permission to approve staff." });
-    }
-
     const pendingUser = await prisma.pendingUser.findUnique({ where: { id: req.params.pendingUserId } });
     if (!pendingUser || pendingUser.organizationId !== req.user.organizationId) {
       return res.status(404).json({ success: false, message: "Pending request not found." });
     }
 
-    if (req.user.role === "ADMIN") {
+    if (req.user.role === "DEPT_ADMIN") {
       const scopedIds = req.user.adminScope?.departmentIds || [];
       if (scopedIds.length > 0 && pendingUser.departmentId && !scopedIds.includes(pendingUser.departmentId)) {
         return res.status(403).json({ success: false, message: "This department is outside your admin scope." });
@@ -474,15 +485,20 @@ router.patch("/approve/:pendingUserId", authenticate, authorizeRoles("ORG_ADMIN"
   }
 });
 
-router.delete("/reject/:pendingUserId", authenticate, authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+router.delete("/reject/:pendingUserId", authenticate, authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
-    if (!canManageStaffFor(req.user)) {
-      return res.status(403).json({ success: false, message: "You do not have permission to reject staff." });
-    }
     const pendingUser = await prisma.pendingUser.findUnique({ where: { id: req.params.pendingUserId } });
     if (!pendingUser || pendingUser.organizationId !== req.user.organizationId) {
       return res.status(404).json({ success: false, message: "Pending request not found." });
     }
+
+    if (req.user.role === "DEPT_ADMIN") {
+      const scopedIds = req.user.adminScope?.departmentIds || [];
+      if (scopedIds.length > 0 && pendingUser.departmentId && !scopedIds.includes(pendingUser.departmentId)) {
+        return res.status(403).json({ success: false, message: "This department is outside your admin scope." });
+      }
+    }
+
     await prisma.pendingUser.delete({ where: { id: pendingUser.id } });
 
     await logAudit({
@@ -501,19 +517,27 @@ router.delete("/reject/:pendingUserId", authenticate, authorizeRoles("ORG_ADMIN"
   }
 });
 
-// ── Invitations (ORG_ADMIN / ADMIN-initiated) ───────────────
+// ── Invitations (ORG_ADMIN / DEPT_ADMIN-initiated) ──────────
 
-router.post("/invitations", authenticate, authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+router.post("/invitations", authenticate, authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
-    if (!canManageStaffFor(req.user)) {
-      return res.status(403).json({ success: false, message: "You do not have permission to invite users." });
-    }
     const { email, role, departmentId } = req.body;
     if (!email || !role) {
       return res.status(400).json({ success: false, message: "email and role are required." });
     }
-    if (!["STAFF", "ADMIN"].includes(role)) {
-      return res.status(400).json({ success: false, message: "Invitations can only grant STAFF or ADMIN roles." });
+    if (!["STAFF", "DEPT_ADMIN"].includes(role)) {
+      return res.status(400).json({ success: false, message: "Invitations can only grant STAFF or DEPT_ADMIN roles." });
+    }
+    if (req.user.role === "DEPT_ADMIN") {
+      // A DEPT_ADMIN can only invite STAFF into a department within their
+      // own scope — never grant DEPT_ADMIN themselves (that stays an
+      // ORG_ADMIN decision, same line PATCH /staff/:id already draws).
+      if (role !== "STAFF") {
+        return res.status(403).json({ success: false, message: "You can only invite STAFF members." });
+      }
+      if (!departmentId || !hasDepartmentAccess(req.user, departmentId)) {
+        return res.status(403).json({ success: false, message: "This department is outside your admin scope." });
+      }
     }
 
     const organization = await prisma.organization.findUnique({ where: { id: req.user.organizationId } });

@@ -22,44 +22,26 @@ function generateTempPassword() {
 }
 
 // ── Dashboard ────────────────────────────────────────────────
-// One endpoint, permission-adaptive: returns both the stats and a
-// capabilities object so the frontend can render conditionally instead of
-// hitting a different endpoint per role.
+// One endpoint, permission-adaptive: returns both the stats and an
+// isAdmin flag so the frontend can render conditionally instead of hitting
+// a different endpoint per role. Per TARGET.md, DEPT_ADMIN has full rights
+// within their scoped department(s) — no per-capability matrix — so
+// "admin or not" plus department scope is the complete picture; there's
+// nothing finer-grained left to report here.
 
-router.get("/dashboard", authorizeRoles("ORG_ADMIN", "ADMIN", "STAFF"), async (req, res) => {
+router.get("/dashboard", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN", "STAFF"), async (req, res) => {
   try {
     const { role, organizationId, departmentId: userDepartmentId, adminScope } = req.user;
 
-    let capabilities = {
-      canManageStaff: false,
-      canViewAnalytics: false,
-      canEscalate: false,
-      canExportReports: false,
-      canManageCategories: false,
-    };
+    const isAdmin = role === "ORG_ADMIN" || role === "DEPT_ADMIN";
     const where = { organizationId };
 
-    if (role === "ORG_ADMIN") {
-      capabilities = {
-        canManageStaff: true,
-        canViewAnalytics: true,
-        canEscalate: true,
-        canExportReports: true,
-        canManageCategories: true,
-      };
-    } else if (role === "ADMIN") {
+    if (role === "DEPT_ADMIN") {
       if (!adminScope) {
         return res.status(403).json({ success: false, message: "No admin scope configured for this account." });
       }
       const scopedIds = adminScope.departmentIds || [];
       if (scopedIds.length > 0) where.departmentId = { in: scopedIds };
-      capabilities = {
-        canManageStaff: adminScope.canManageStaff,
-        canViewAnalytics: adminScope.canViewAnalytics,
-        canEscalate: adminScope.canEscalate,
-        canExportReports: adminScope.canExportReports,
-        canManageCategories: adminScope.canManageCategories,
-      };
     } else if (role === "STAFF") {
       // Personal performance view, not the department-wide queue (that's
       // GET /complaints) — a dashboard is "how am I doing", not "what's here".
@@ -92,7 +74,7 @@ router.get("/dashboard", authorizeRoles("ORG_ADMIN", "ADMIN", "STAFF"), async (r
       : null;
 
     let categoryBreakdown;
-    if (capabilities.canViewAnalytics) {
+    if (isAdmin) {
       const grouped = await prisma.complaint.groupBy({ by: ["categoryId"], where, _count: true });
       const categories = await prisma.departmentCategory.findMany({
         where: { id: { in: grouped.map((g) => g.categoryId) } },
@@ -117,7 +99,7 @@ router.get("/dashboard", authorizeRoles("ORG_ADMIN", "ADMIN", "STAFF"), async (r
           overdue,
           ...(categoryBreakdown && { categoryBreakdown }),
         },
-        capabilities,
+        isAdmin,
       },
     });
   } catch (error) {
@@ -128,18 +110,18 @@ router.get("/dashboard", authorizeRoles("ORG_ADMIN", "ADMIN", "STAFF"), async (r
 
 // ── Staff management ─────────────────────────────────────────
 
-router.get("/staff", authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+router.get("/staff", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
     const { role, organizationId, adminScope } = req.user;
-    if (role === "ADMIN" && !adminScope) {
+    if (role === "DEPT_ADMIN" && !adminScope) {
       return res.status(403).json({ success: false, message: "No admin scope configured for this account." });
     }
-    const scopedIds = role === "ADMIN" ? adminScope.departmentIds || [] : [];
+    const scopedIds = role === "DEPT_ADMIN" ? adminScope.departmentIds || [] : [];
 
     const memberships = await prisma.organizationMembership.findMany({
       where: {
         organizationId,
-        role: { in: ["STAFF", "ADMIN"] },
+        role: { in: ["STAFF", "DEPT_ADMIN"] },
         ...(scopedIds.length > 0 && { departmentId: { in: scopedIds } }),
       },
       include: {
@@ -156,18 +138,18 @@ router.get("/staff", authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
   }
 });
 
-router.get("/staff/pending", authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+router.get("/staff/pending", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
     const { role, organizationId, adminScope } = req.user;
-    if (role === "ADMIN" && !adminScope) {
+    if (role === "DEPT_ADMIN" && !adminScope) {
       return res.status(403).json({ success: false, message: "No admin scope configured for this account." });
     }
-    const scopedIds = role === "ADMIN" ? adminScope.departmentIds || [] : [];
+    const scopedIds = role === "DEPT_ADMIN" ? adminScope.departmentIds || [] : [];
 
     const pending = await prisma.pendingUser.findMany({
       where: {
         organizationId,
-        role: { in: ["STAFF", "ADMIN"] },
+        role: { in: ["STAFF", "DEPT_ADMIN"] },
         ...(scopedIds.length > 0 && { departmentId: { in: scopedIds } }),
       },
       orderBy: { createdAt: "desc" },
@@ -179,10 +161,12 @@ router.get("/staff/pending", authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, r
   }
 });
 
-// ADMIN can only flip status (activate/deactivate) within their scope.
-// Role/department/position changes are ORG_ADMIN-only, and neither can
-// touch an ORG_ADMIN membership through this endpoint.
-router.patch("/staff/:membershipId", authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+// DEPT_ADMIN can only flip status (activate/deactivate) within their
+// scope — no separate canManageStaff flag needed, that's just what being a
+// DEPT_ADMIN means now. Role/department/position changes are ORG_ADMIN-
+// only, and neither can touch an ORG_ADMIN membership through this
+// endpoint.
+router.patch("/staff/:membershipId", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
     const membership = await prisma.organizationMembership.findFirst({
       where: { id: req.params.membershipId, organizationId: req.user.organizationId },
@@ -192,10 +176,7 @@ router.patch("/staff/:membershipId", authorizeRoles("ORG_ADMIN", "ADMIN"), async
       return res.status(403).json({ success: false, message: "Cannot modify an ORG_ADMIN membership through this endpoint." });
     }
 
-    if (req.user.role === "ADMIN") {
-      if (!req.user.adminScope?.canManageStaff) {
-        return res.status(403).json({ success: false, message: "You do not have permission to manage staff." });
-      }
+    if (req.user.role === "DEPT_ADMIN") {
       if (!hasDepartmentAccess(req.user, membership.departmentId)) {
         return res.status(403).json({ success: false, message: "This member is outside your admin scope." });
       }
@@ -213,8 +194,8 @@ router.patch("/staff/:membershipId", authorizeRoles("ORG_ADMIN", "ADMIN"), async
       });
       if (!department) return res.status(404).json({ success: false, message: "Department not found." });
     }
-    if (role && !["STAFF", "ADMIN"].includes(role)) {
-      return res.status(400).json({ success: false, message: "role must be STAFF or ADMIN." });
+    if (role && !["STAFF", "DEPT_ADMIN"].includes(role)) {
+      return res.status(400).json({ success: false, message: "role must be STAFF or DEPT_ADMIN." });
     }
 
     const updated = await prisma.organizationMembership.update({
@@ -234,14 +215,17 @@ router.patch("/staff/:membershipId", authorizeRoles("ORG_ADMIN", "ADMIN"), async
   }
 });
 
+// Department scoping only — a DEPT_ADMIN has full rights within whichever
+// department(s) this sets (empty = every department in the org). See
+// TARGET.md: the earlier per-capability matrix is deliberately gone.
 router.patch("/staff/:membershipId/scope", authorizeRoles("ORG_ADMIN"), async (req, res) => {
   try {
     const membership = await prisma.organizationMembership.findFirst({
-      where: { id: req.params.membershipId, organizationId: req.user.organizationId, role: "ADMIN" },
+      where: { id: req.params.membershipId, organizationId: req.user.organizationId, role: "DEPT_ADMIN" },
     });
-    if (!membership) return res.status(404).json({ success: false, message: "Admin membership not found." });
+    if (!membership) return res.status(404).json({ success: false, message: "Department admin membership not found." });
 
-    const { departmentIds, canManageStaff, canViewAnalytics, canEscalate, canExportReports, canManageCategories } = req.body;
+    const { departmentIds } = req.body;
 
     if (departmentIds && departmentIds.length > 0) {
       const count = await prisma.department.count({
@@ -256,20 +240,10 @@ router.patch("/staff/:membershipId/scope", authorizeRoles("ORG_ADMIN"), async (r
       where: { membershipId: membership.id },
       update: {
         ...(departmentIds !== undefined && { departmentIds }),
-        ...(canManageStaff !== undefined && { canManageStaff }),
-        ...(canViewAnalytics !== undefined && { canViewAnalytics }),
-        ...(canEscalate !== undefined && { canEscalate }),
-        ...(canExportReports !== undefined && { canExportReports }),
-        ...(canManageCategories !== undefined && { canManageCategories }),
       },
       create: {
         membershipId: membership.id,
         departmentIds: departmentIds || [],
-        canManageStaff: !!canManageStaff,
-        canViewAnalytics: !!canViewAnalytics,
-        canEscalate: !!canEscalate,
-        canExportReports: !!canExportReports,
-        canManageCategories: !!canManageCategories,
       },
     });
     return res.json({ success: true, data: scope });
@@ -281,16 +255,13 @@ router.patch("/staff/:membershipId/scope", authorizeRoles("ORG_ADMIN"), async (r
 
 // ── Reports ──────────────────────────────────────────────────
 
-router.get("/reports/complaints", authorizeRoles("ORG_ADMIN", "ADMIN"), async (req, res) => {
+router.get("/reports/complaints", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
   try {
     const { role, organizationId, adminScope } = req.user;
-    if (role === "ADMIN") {
-      if (!adminScope) return res.status(403).json({ success: false, message: "No admin scope configured for this account." });
-      if (!adminScope.canExportReports) {
-        return res.status(403).json({ success: false, message: "You do not have permission to export reports." });
-      }
+    if (role === "DEPT_ADMIN" && !adminScope) {
+      return res.status(403).json({ success: false, message: "No admin scope configured for this account." });
     }
-    const scopedIds = role === "ADMIN" ? adminScope.departmentIds || [] : [];
+    const scopedIds = role === "DEPT_ADMIN" ? adminScope.departmentIds || [] : [];
     const where = { organizationId, ...(scopedIds.length > 0 && { departmentId: { in: scopedIds } }) };
 
     const complaints = await prisma.complaint.findMany({

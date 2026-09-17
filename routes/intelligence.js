@@ -6,27 +6,27 @@ const { authenticate, authorizeRoles } = require('../middleware/authenticate');
 
 const intelligence = new ResoBridgeIntelligence();
 
-router.use(authenticate, authorizeRoles('ORG_ADMIN', 'ADMIN'));
+router.use(authenticate, authorizeRoles('ORG_ADMIN', 'DEPT_ADMIN'));
 
 // A missing AdminScope row must fail closed (403), not be treated as
 // unrestricted — same distinction as authorizeDepartment in
 // middleware/authenticate.js: only an AdminScope that *explicitly* has an
 // empty departmentIds array means "all departments in the org."
 router.use((req, res, next) => {
-  if (req.user.role === 'ADMIN' && !req.user.adminScope) {
+  if (req.user.role === 'DEPT_ADMIN' && !req.user.adminScope) {
     return res.status(403).json({ success: false, message: 'No admin scope configured for this account.' });
   }
   next();
 });
 
-// ADMIN is restricted to their AdminScope.departmentIds (empty = all
+// DEPT_ADMIN is restricted to their AdminScope.departmentIds (empty = all
 // departments in the org); ORG_ADMIN is unrestricted within their org.
 // The old version queried Complaint/Hall globally with no org filter at
 // all — that was a cross-tenant leak, not a stylistic gap, fixed here.
 function complaintScope(req) {
   const { role, organizationId, adminScope } = req.user;
   const where = { organizationId };
-  if (role === 'ADMIN') {
+  if (role === 'DEPT_ADMIN') {
     const scopedIds = adminScope.departmentIds || [];
     if (scopedIds.length > 0) where.departmentId = { in: scopedIds };
   }

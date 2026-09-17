@@ -19,7 +19,7 @@ module.exports = {
 
   // Role-based access control
   roleAccess: {
-    MEMBER: {
+    REQUESTER: {
       canViewOwnComplaints: true,
       canSubmitComplaints: true,
       canViewOrganizationInfo: true,
@@ -31,7 +31,7 @@ module.exports = {
       canViewDepartmentInfo: true,
       canAccessChatbot: true
     },
-    ADMIN: {
+    DEPT_ADMIN: {
       canViewScopedComplaints: true,
       canManageUsers: true,
       canViewAnalytics: true,
