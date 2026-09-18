@@ -646,6 +646,13 @@ router.post("/invitations/:token/accept", async (req, res) => {
       role: membership.role,
       organizationId: membership.organizationId,
       userId: user.id,
+      // Same shape as /login and /verify-otp — the frontend's storeSession
+      // reads these directly, and without them a freshly-accepted session
+      // would have no name/email until the next full page load re-fetched
+      // /auth/me.
+      email: user.email,
+      fullName: user.fullName,
+      forcePasswordReset: user.forcePasswordReset,
     });
   } catch (error) {
     console.error("Accept invitation error:", error);

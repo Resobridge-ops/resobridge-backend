@@ -12,7 +12,32 @@ const SENDER = {
   name: "ResoBridge",
 };
 
+// Every OTP, temp password, and invitation link in this file only ever
+// reaches the developer through a real inbox — there is no other way to
+// see them. That's fine in production, but it's a hard QA blocker
+// locally: without Brevo configured (or with a throwaway/unreachable
+// test address), these values are simply lost, and every single
+// non-SUPERADMIN onboarding path depends on one of them. This does not
+// weaken anything — it surfaces a value that was already being
+// transmitted, to the person who already has the server console — and
+// it's off entirely once NODE_ENV=production.
+const ECHO_TO_CONSOLE = process.env.NODE_ENV !== "production";
+
+function stripHtml(html) {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function sendBrevoEmail({ to, subject, htmlContent }) {
+  if (ECHO_TO_CONSOLE) {
+    console.log(
+      `\n── DEV EMAIL ECHO (NODE_ENV != production) ─────────────\nTo: ${to}\nSubject: ${subject}\n\n${stripHtml(htmlContent)}\n──────────────────────────────────────────────────────────\n`
+    );
+  }
   try {
     await axios.post(
       BREVO_API_URL,
