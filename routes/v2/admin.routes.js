@@ -122,6 +122,7 @@ router.get("/staff", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res)
       where: {
         organizationId,
         role: { in: ["STAFF", "DEPT_ADMIN"] },
+        userId: { not: req.user.id },
         ...(scopedIds.length > 0 && { departmentId: { in: scopedIds } }),
       },
       include: {
