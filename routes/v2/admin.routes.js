@@ -267,7 +267,14 @@ router.get("/reports/complaints", authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), asy
 
     const complaints = await prisma.complaint.findMany({
       where,
-      include: { category: true, department: true, area: true, member: { select: { fullName: true, email: true } } },
+      include: {
+        category: true,
+        department: true,
+        area: true,
+        asset: true,
+        member: { select: { fullName: true, email: true } },
+        assignedStaff: { select: { fullName: true, email: true } },
+      },
       orderBy: { createdAt: "desc" },
     });
     return res.json({ success: true, data: complaints });
