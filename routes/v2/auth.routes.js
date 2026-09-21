@@ -362,6 +362,8 @@ router.post("/verify-otp", async (req, res) => {
       token,
       role: membership.role,
       organizationId: organization.id,
+      organizationName: organization.name,
+      organizationSlug: organization.slug,
       userId: user.id,
       fullName: user.fullName,
       email: user.email,
@@ -581,12 +583,79 @@ router.post("/invitations", authenticate, authorizeRoles("ORG_ADMIN", "DEPT_ADMI
   }
 });
 
+// Sent invitations were previously invisible until accepted — an
+// ORG_ADMIN/DEPT_ADMIN had no way to see who they'd already invited, or
+// whether an invite was still outstanding. Same scoping as GET
+// /admin/staff/pending: DEPT_ADMIN only sees invitations into their own
+// department scope.
+router.get("/invitations", authenticate, authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
+  try {
+    const { role, organizationId, adminScope } = req.user;
+    if (role === "DEPT_ADMIN" && !adminScope) {
+      return res.status(403).json({ success: false, message: "No admin scope configured for this account." });
+    }
+    const scopedIds = role === "DEPT_ADMIN" ? adminScope.departmentIds || [] : [];
+
+    const invitations = await prisma.invitation.findMany({
+      where: {
+        organizationId,
+        ...(scopedIds.length > 0 && { departmentId: { in: scopedIds } }),
+      },
+      include: {
+        invitedBy: { select: { id: true, fullName: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    return res.json({ success: true, data: invitations });
+  } catch (error) {
+    console.error("List invitations error:", error);
+    return res.status(500).json({ success: false, message: "Server error." });
+  }
+});
+
+router.post("/invitations/:id/revoke", authenticate, authorizeRoles("ORG_ADMIN", "DEPT_ADMIN"), async (req, res) => {
+  try {
+    const invitation = await prisma.invitation.findFirst({
+      where: { id: req.params.id, organizationId: req.user.organizationId },
+    });
+    if (!invitation) return res.status(404).json({ success: false, message: "Invitation not found." });
+    if (invitation.status !== "PENDING") {
+      return res.status(400).json({ success: false, message: "Only a pending invitation can be revoked." });
+    }
+    if (req.user.role === "DEPT_ADMIN" && !hasDepartmentAccess(req.user, invitation.departmentId)) {
+      return res.status(403).json({ success: false, message: "This invitation is outside your admin scope." });
+    }
+
+    const updated = await prisma.invitation.update({
+      where: { id: invitation.id },
+      data: { status: "REVOKED" },
+    });
+
+    await logAudit({
+      organizationId: req.user.organizationId,
+      actorId: req.user.id,
+      action: "REVOKE",
+      entityType: "Invitation",
+      entityId: invitation.id,
+      description: `Revoked invitation to ${invitation.email}`,
+    });
+
+    return res.json({ success: true, data: updated });
+  } catch (error) {
+    console.error("Revoke invitation error:", error);
+    return res.status(500).json({ success: false, message: "Server error." });
+  }
+});
+
 router.post("/invitations/:token/accept", async (req, res) => {
   try {
     const { token } = req.params;
     const { password, fullName } = req.body;
 
-    const invitation = await prisma.invitation.findUnique({ where: { token } });
+    const invitation = await prisma.invitation.findUnique({
+      where: { token },
+      include: { organization: { select: { name: true, slug: true } } },
+    });
     if (!invitation || invitation.status !== "PENDING") {
       return res.status(404).json({ success: false, message: "Invitation not found or already used." });
     }
@@ -662,6 +731,8 @@ router.post("/invitations/:token/accept", async (req, res) => {
       token: jwtToken,
       role: membership.role,
       organizationId: membership.organizationId,
+      organizationName: invitation.organization.name,
+      organizationSlug: invitation.organization.slug,
       userId: user.id,
       // Same shape as /login and /verify-otp — the frontend's storeSession
       // reads these directly, and without them a freshly-accepted session
@@ -768,6 +839,8 @@ router.post("/login", async (req, res) => {
       token,
       role: membership.role,
       organizationId: membership.organizationId,
+      organizationName: membership.organization.name,
+      organizationSlug: membership.organization.slug,
       userId: user.id,
       email: user.email,
       fullName: user.fullName,

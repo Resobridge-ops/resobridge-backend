@@ -232,7 +232,8 @@ router.get("/", async (req, res) => {
     if (status) where.status = status;
     if (areaId) where.areaId = areaId;
     if (categoryId) where.categoryId = categoryId;
-    if (assignedStaffId) where.assignedStaffId = assignedStaffId;
+    if (assignedStaffId === "unassigned") where.assignedStaffId = null;
+    else if (assignedStaffId) where.assignedStaffId = assignedStaffId;
     if (priority) where.priority = priority;
 
     const complaints = await prisma.complaint.findMany({
