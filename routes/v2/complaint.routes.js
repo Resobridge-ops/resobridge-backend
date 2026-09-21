@@ -258,6 +258,10 @@ router.get("/:complaintId", async (req, res) => {
         asset: true,
         member: { select: { id: true, fullName: true, email: true } },
         assignedStaff: { select: { id: true, fullName: true, email: true } },
+        attachments: {
+          include: { uploadedBy: { select: { id: true, fullName: true, email: true } } },
+          orderBy: { createdAt: "asc" },
+        },
       },
     });
     if (!complaint) return res.status(404).json({ success: false, message: "Request not found." });
