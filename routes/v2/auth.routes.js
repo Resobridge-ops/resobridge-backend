@@ -628,6 +628,23 @@ router.post("/invitations/:token/accept", async (req, res) => {
       },
     });
 
+    // A DEPT_ADMIN with no AdminScope row fails closed everywhere
+    // (GET /admin/dashboard and friends deliberately treat a missing scope
+    // as "not configured", not "unrestricted" — see middleware/authenticate.js)
+    // — so one has to exist the moment the membership does, not whenever an
+    // ORG_ADMIN happens to remember to set it. Scope to the department the
+    // invitation named, if any; an org-wide invite (no department) becomes
+    // an org-wide DEPT_ADMIN (empty departmentIds), which is exactly what
+    // sending that invitation without picking a department meant.
+    if (invitation.role === "DEPT_ADMIN") {
+      await prisma.adminScope.create({
+        data: {
+          membershipId: membership.id,
+          departmentIds: invitation.departmentId ? [invitation.departmentId] : [],
+        },
+      });
+    }
+
     await prisma.invitation.update({
       where: { id: invitation.id },
       data: { status: "ACCEPTED", acceptedAt: new Date() },
