@@ -18,10 +18,10 @@ app.use(cors({
       /^http:\/\/localhost:[3-9][0-9]{3}$/,
       // Production URLs
       "https://resobridge-dashboard.netlify.app",
-      "https://resobridge-demo.netlify.app",
+      "https://multitenant-resobridge.netlify.app",
       // Render URLs (add your actual Render frontend URL)
       /^https:\/\/.*\.onrender\.com$/,
-      "https://resobridge-dashboard.onrender.com",
+      "https://resobridge-backend-enal.onrender.com",
     ];
 
     const isAllowed = allowedOrigins.some((allowed) => {
